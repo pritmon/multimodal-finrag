@@ -14,12 +14,15 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import entities, ingest, query
 from src.api.schemas import HealthResponse
@@ -109,10 +112,20 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ── Static files ──────────────────────────────────────────────────────────
+    static_dir = Path(__file__).parent / "static"
+    static_dir.mkdir(exist_ok=True)
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
     # ── Routes ────────────────────────────────────────────────────────────────
     app.include_router(ingest.router)
     app.include_router(query.router)
     app.include_router(entities.router)
+
+    # ── Root ──────────────────────────────────────────────────────────────────
+    @app.get("/")
+    async def root():
+        return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
 
     # ── Health ────────────────────────────────────────────────────────────────
     @app.get(

@@ -1,16 +1,15 @@
-"""POST /ingest — upload a PDF document to S3 and trigger async Lambda processing."""
+"""POST /ingest — upload a PDF, extract text + charts, index into RAG pipeline."""
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
 
 import boto3
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from typing import Annotated
 
 from src.api.schemas import IngestResponse
 from src.config import Settings, get_settings
@@ -19,34 +18,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingestion"])
 
 
-def _get_s3_client(settings: Settings = Depends(get_settings)):
-    session = boto3.Session(**settings.boto3_session_kwargs)
-    return session.client("s3")
-
-
-def _get_lambda_client(settings: Settings = Depends(get_settings)):
-    session = boto3.Session(**settings.boto3_session_kwargs)
-    return session.client("lambda")
-
-
 @router.post(
     "",
     response_model=IngestResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Upload a PDF and trigger async ingestion",
+    summary="Upload a PDF and ingest (text + charts)",
     description=(
-        "Accepts a multipart/form-data PDF upload, stores it in S3, then "
-        "asynchronously invokes the Lambda document processor. Returns a job_id "
-        "that can be used to poll status (via DynamoDB or a future status endpoint)."
+        "Accepts a PDF upload, stores it in S3, extracts text blocks and chart images, "
+        "captions charts with Claude Vision, then indexes everything into the RAG pipeline."
     ),
 )
 async def ingest_document(
     file: Annotated[UploadFile, File(description="PDF file to ingest")],
     settings: Settings = Depends(get_settings),
 ) -> IngestResponse:
-    # ── Validate file type ────────────────────────────────────────────────────
-    if file.content_type not in ("application/pdf", "application/octet-stream"):
-        if not (file.filename or "").lower().endswith(".pdf"):
+    # ── Validate ──────────────────────────────────────────────────────────────
+    if not (file.filename or "").lower().endswith(".pdf"):
+        if file.content_type not in ("application/pdf", "application/octet-stream"):
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail="Only PDF files are accepted",
@@ -56,19 +44,16 @@ async def ingest_document(
     job_id = uuid.uuid4().hex
     s3_key = f"{settings.s3_prefix}{job_id}/{filename}"
 
-    # ── Read file content ─────────────────────────────────────────────────────
     content = await file.read()
     if not content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
 
-    logger.info("Ingesting file: %s (%d bytes) → %s", filename, len(content), s3_key)
+    logger.info("Ingesting %s (%d bytes)", filename, len(content))
 
     # ── Upload to S3 ──────────────────────────────────────────────────────────
-    s3 = _get_s3_client(settings)
     try:
+        session = boto3.Session(**settings.boto3_session_kwargs)
+        s3 = session.client("s3")
         s3.put_object(
             Bucket=settings.s3_bucket,
             Key=s3_key,
@@ -88,28 +73,56 @@ async def ingest_document(
             detail=f"S3 upload failed: {exc.response['Error']['Message']}",
         )
 
-    # ── Invoke Lambda asynchronously ──────────────────────────────────────────
-    lambda_payload = json.dumps({"bucket": settings.s3_bucket, "key": s3_key})
-    lambda_client = _get_lambda_client(settings)
-    try:
-        lambda_client.invoke(
-            FunctionName=settings.lambda_function_name,
-            InvocationType="Event",  # async (fire-and-forget)
-            Payload=lambda_payload.encode(),
-        )
-        logger.info("Lambda invoked asynchronously for job %s", job_id)
-        trigger_status = "queued"
-        message = "Document uploaded and processing queued"
-    except ClientError as exc:
-        # Lambda trigger failure is non-fatal: document is in S3
-        logger.warning("Lambda invocation failed (non-fatal): %s", exc)
-        trigger_status = "uploaded_only"
-        message = "Document uploaded to S3; Lambda trigger failed — manual processing may be required"
+    # ── Full multimodal ingestion (text + charts) ─────────────────────────────
+    from fastapi import Request
+    from starlette.requests import Request as StarletteRequest
+
+    # Access app state via a workaround — get pipeline from app state
+    import src.api.main as _main_module
+    pipeline = getattr(_main_module.app.state, "pipeline", None)
+
+    text_nodes = 0
+    chart_nodes = 0
+    chart_captions = []
+
+    if pipeline is not None:
+        try:
+            result = pipeline.add_pdf_bytes(
+                content,
+                source=filename,
+                generate_chart_captions=True,
+            )
+            if isinstance(result, dict):
+                text_nodes = result.get("text_nodes", 0)
+                chart_nodes = result.get("chart_nodes", 0)
+                chart_captions = result.get("chart_captions", [])
+            else:
+                text_nodes = result
+            logger.info(
+                "Indexed %d text nodes + %d chart nodes from %s",
+                text_nodes, chart_nodes, filename,
+            )
+        except Exception as exc:
+            logger.error("Indexing failed: %s", exc, exc_info=True)
+            return IngestResponse(
+                job_id=job_id,
+                filename=filename,
+                s3_key=s3_key,
+                status="upload_ok_index_failed",
+                message=f"Uploaded to S3 but indexing failed: {exc}",
+            )
+    else:
+        logger.warning("Pipeline not available — document stored in S3 only")
+
+    parts = [f"{text_nodes} text chunks"]
+    if chart_nodes:
+        parts.append(f"{chart_nodes} charts captioned by Claude Vision")
+    summary = " + ".join(parts)
 
     return IngestResponse(
         job_id=job_id,
         filename=filename,
         s3_key=s3_key,
-        status=trigger_status,
-        message=message,
+        status="indexed",
+        message=f"Successfully indexed {summary} from '{filename}'",
     )

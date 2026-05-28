@@ -106,7 +106,7 @@ class ChartExtractor:
         clip_model_name: str = "ViT-B-32",
         clip_pretrained: str = "openai",
         chart_threshold: float = 0.45,
-        bedrock_model_id: str = "anthropic.claude-3-sonnet-20240229-v1:0",
+        bedrock_model_id: str = "anthropic.claude-sonnet-4-20250514-v1:0",
         aws_region: str = "us-east-1",
         device: Optional[str] = None,
     ) -> None:

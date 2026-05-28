@@ -214,10 +214,17 @@ class FinRAGPipeline:
 
     def add_pdf_bytes(
         self, pdf_bytes: bytes, source: str = "unknown", **kwargs: Any
-    ) -> int:
-        """Parse PDF bytes and add to the index."""
+    ) -> dict:
+        """Parse PDF bytes and add to the index. Returns dict with node counts."""
         parsed = self._pdf_parser.parse_bytes(pdf_bytes, source=source)
-        return self.add_parsed_document(parsed, **kwargs)
+        before_charts = len(self._chart_nodes)
+        text_nodes = self.add_parsed_document(parsed, **kwargs)
+        new_charts = self._chart_nodes[before_charts:]
+        return {
+            "text_nodes": text_nodes - len(new_charts),
+            "chart_nodes": len(new_charts),
+            "chart_captions": [c.caption for c in new_charts if c.caption],
+        }
 
     def add_pdf_file(self, path: str | Path, **kwargs: Any) -> int:
         """Parse a PDF file and add to the index."""
