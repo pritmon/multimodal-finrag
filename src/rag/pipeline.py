@@ -98,10 +98,12 @@ class FinRAGPipeline:
             aws_region=self.cfg.aws_region,
             max_tokens=self.cfg.bedrock_max_tokens,
             temperature=self.cfg.bedrock_temperature,
+            session_kwargs=self.cfg.boto3_session_kwargs,
         )
         self._embed_model = BedrockTitanEmbedding(
             model_id=self.cfg.bedrock_embed_model_id,
             aws_region=self.cfg.aws_region,
+            session_kwargs=self.cfg.boto3_session_kwargs,
         )
 
         LlamaSettings.llm = self._llm
@@ -327,6 +329,7 @@ class FinRAGPipeline:
             self._chart_extractor = ChartExtractor(
                 bedrock_model_id=self.cfg.bedrock_model_id,
                 aws_region=self.cfg.aws_region,
+                session_kwargs=self.cfg.boto3_session_kwargs,
             )
         return self._chart_extractor
 

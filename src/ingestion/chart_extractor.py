@@ -109,6 +109,7 @@ class ChartExtractor:
         bedrock_model_id: str = "anthropic.claude-sonnet-4-20250514-v1:0",
         aws_region: str = "us-east-1",
         device: Optional[str] = None,
+        session_kwargs: Optional[dict] = None,
     ) -> None:
         self.chart_threshold = chart_threshold
         self.bedrock_model_id = bedrock_model_id
@@ -122,7 +123,8 @@ class ChartExtractor:
         self._tokenizer = open_clip.get_tokenizer(clip_model_name)
         self._text_features = self._encode_labels()
 
-        self._bedrock = boto3.client("bedrock-runtime", region_name=aws_region)
+        session = boto3.Session(**(session_kwargs or {}))
+        self._bedrock = session.client("bedrock-runtime", region_name=aws_region)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
