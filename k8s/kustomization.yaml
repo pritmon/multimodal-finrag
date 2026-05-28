@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: finrag
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+
+# Image tag override — use `kustomize edit set image` in CI/CD
+images:
+  - name: 123456789012.dkr.ecr.us-east-1.amazonaws.com/finrag-api
+    newTag: latest
+
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: finrag-system
+
+# Patches for environment-specific overrides
+# Uncomment and customise as needed:
+# patches:
+#   - path: overlays/prod/deployment-patch.yaml
+#     target:
+#       kind: Deployment
+#       name: finrag-api

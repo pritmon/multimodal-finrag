@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: finrag-api
+  namespace: finrag
+  labels:
+    app.kubernetes.io/name: finrag
+    app.kubernetes.io/component: api
+  annotations:
+    # Prometheus scraping
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+spec:
+  type: ClusterIP
+  selector:
+    app: finrag-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

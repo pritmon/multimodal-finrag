@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: finrag-config
+  namespace: finrag
+  labels:
+    app.kubernetes.io/name: finrag
+    app.kubernetes.io/component: config
+data:
+  AWS_REGION: "us-east-1"
+  S3_BUCKET: "finrag-documents"
+  S3_PREFIX: "documents/"
+  BEDROCK_MODEL_ID: "anthropic.claude-3-sonnet-20240229-v1:0"
+  BEDROCK_EMBED_MODEL_ID: "amazon.titan-embed-text-v1"
+  LAMBDA_FUNCTION_NAME: "finrag-document-processor"
+  DYNAMODB_TABLE_NAME: "finrag-document-metadata"
+  INDEX_PERSIST_DIR: "/app/index_store"
+  LORA_MODEL_PATH: "/app/models/finrag-ner-lora"
+  BASE_NER_MODEL: "bert-base-uncased"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  API_WORKERS: "1"
+  LOG_LEVEL: "INFO"
+  RETRIEVER_TOP_K: "8"
+  RERANKER_TOP_N: "4"
+  CHUNK_SIZE: "512"
+  CHUNK_OVERLAP: "64"
+  CORS_ORIGINS: "https://app.finrag.example.com"
