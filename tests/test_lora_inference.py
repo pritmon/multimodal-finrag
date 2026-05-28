@@ -219,8 +219,9 @@ class TestNERInferenceEngineWithTinyModel:
         """Create a tiny BERT model saved to disk."""
         from transformers import BertConfig, BertForTokenClassification, AutoTokenizer
 
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         config = BertConfig(
-            vocab_size=1000,
+            vocab_size=tokenizer.vocab_size,
             hidden_size=64,
             num_hidden_layers=2,
             num_attention_heads=2,
@@ -230,7 +231,6 @@ class TestNERInferenceEngineWithTinyModel:
             label2id=LABEL2ID,
         )
         model = BertForTokenClassification(config)
-        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
         model_dir = tmp_path / "tiny_ner"
         model_dir.mkdir()

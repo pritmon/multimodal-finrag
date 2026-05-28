@@ -89,6 +89,7 @@ class TestBedrockLLM:
 
         llm = BedrockLLM(model_id="anthropic.claude-3-sonnet-20240229-v1:0", aws_region="us-east-1")
         object.__setattr__(llm, "_client", mock_bedrock_client)
+        mock_bedrock_client.invoke_model.side_effect = None
         mock_bedrock_client.invoke_model.return_value = _mock_bedrock_response("Test answer")
 
         result = llm.complete("What is 2 + 2?")

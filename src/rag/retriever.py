@@ -158,7 +158,7 @@ def _reciprocal_rank_fusion(
             node_id = nws.node.node_id
             scores[node_id] += 1.0 / (k + rank)
             if node_id not in node_map:
-                node_map[node_id] = nws
+                node_map[node_id] = nws.node
 
     result = [
         NodeWithScore(node=node_map[node_id], score=score)
