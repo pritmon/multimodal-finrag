@@ -1,212 +1,238 @@
 # multimodal-finrag — Project Q&A
-
-Interview-style questions and answers about the system architecture, design decisions, and implementation.
+### Explained like you're 10 years old 🎒
 
 ---
 
 ## 1. What is this project?
 
-A **Multimodal Financial Document Intelligence** system that lets you upload PDF financial documents (annual reports, earnings updates) and ask natural language questions about them.
+Imagine you have a giant book — like a company's yearly report with 369 pages. You want to ask it questions like "How much money did they make?" but you don't want to read all 369 pages yourself.
 
-It combines:
-- **RAG** (Retrieval-Augmented Generation) for accurate, cited answers
-- **Multimodal** understanding (text + charts/images)
-- **AWS Bedrock** for LLM inference and embeddings
-- **FastAPI** backend with async document indexing
-- **LlamaIndex** for vector indexing and retrieval
+This project is like a **super smart robot librarian**. You give it the book, it reads everything, remembers it, and then you can ask it any question. It will find the right page and give you the exact answer.
+
+It works for financial documents like:
+- Company annual reports (like Infosys)
+- Quarterly earnings updates (like Tesla Q1 2026)
 
 ---
 
 ## 2. What is RAG and why use it here?
 
-**RAG = Retrieval-Augmented Generation.**
+**RAG = Retrieval-Augmented Generation**
 
-Instead of relying on an LLM's training data (which may be outdated or hallucinated), RAG:
-1. Retrieves the most relevant chunks from your documents
-2. Passes them as context to the LLM
-3. LLM answers based only on retrieved content
+Think of it like an open-book exam vs a closed-book exam.
 
-**Why it matters for finance:** Revenue figures, EPS, margins change every quarter. A static LLM would give wrong numbers. RAG pulls the exact figures from the uploaded document.
+- **Closed-book (bad):** The AI answers from memory. But it might remember wrong things or old numbers. Like asking your friend "what was Tesla's revenue last quarter?" — they might guess wrong.
+
+- **Open-book (RAG, good):** The AI first finds the relevant pages from your document, then reads those pages to answer. It's always correct because it's reading the actual book.
+
+**Why important for finance?** Revenue, profits, employee count — these change every quarter. RAG always reads the latest uploaded document, so it never gives outdated or made-up numbers.
 
 ---
 
 ## 3. Walk me through the ingestion pipeline.
 
+"Ingestion" means the robot librarian reading and memorizing your book. Here's what happens step by step:
+
 ```
-PDF Upload → S3 → Background Thread
-               ↓
-         PyMuPDF (fitz)
-         - Extract text blocks per page
-         - Merge blocks by page → one Document per page
-               ↓
-         SentenceSplitter (512 tokens, 64 overlap)
-         - 369 pages → ~800 nodes
-               ↓
-         BedrockTitanEmbedding (parallel, 5 workers)
-         - Each node → 1536-dim vector
-               ↓
-         VectorStoreIndex (LlamaIndex)
-         - Persisted to disk (index_store/)
+You upload a PDF
+      ↓
+Save it to Amazon's cloud storage (S3) — like Google Drive
+      ↓
+Read all the text from the PDF (PyMuPDF)
+— like scanning every page
+      ↓
+Cut it into small pieces called "chunks"
+— like cutting a book into 800 sticky notes
+      ↓
+Convert each sticky note into a list of numbers (embeddings)
+— numbers represent the "meaning" of the text
+      ↓
+Save all the numbers to a file on disk (index)
+— like making a very organized index at the back of a book
 ```
 
-**Key optimization:** Originally created one Document per text block (11,327 nodes). Merged to one per page → 800 nodes → 10x faster indexing.
+**Smart trick:** At first we made 11,327 sticky notes (one per paragraph). Way too many! Changed to one sticky note per page → only 800 notes → 10x faster.
 
 ---
 
 ## 4. What is the retrieval strategy?
 
-**Hybrid retrieval = BM25 + Vector + RRF + Cross-encoder reranking**
+When you ask a question, the system needs to find the right sticky notes. It uses **two methods** and combines them:
 
-| Step | Method | Purpose |
-|------|--------|---------|
-| 1 | BM25 (keyword) | Exact term matching — great for numbers, tickers |
-| 2 | Vector (semantic) | Meaning-based — handles paraphrasing |
-| 3 | RRF fusion | Merge both ranked lists into one |
-| 4 | Cross-encoder reranking | Re-score top candidates with query-aware model |
+**Method 1 — BM25 (keyword search):**
+Like using Ctrl+F on your computer. If you search "22,387" it finds the exact page with that number. Great for exact numbers and names.
 
-**Why hybrid?** Pure vector search misses exact numbers ("22,387"). Pure BM25 misses semantic queries ("how profitable is Tesla"). Combining both gives best recall.
+**Method 2 — Vector search (meaning search):**
+Like finding a page even if it uses different words. If you ask "how profitable is Tesla?" it finds pages about "operating margin" and "net income" even if you didn't use those exact words.
+
+**Then combine them:**
+Both methods give you a list of "probably relevant" pages. We merge both lists using a formula called **RRF** (see next question).
+
+**Then double-check:**
+A smarter (but slower) AI reads your question and the top candidates together and gives a final score. This is called **reranking**.
 
 ---
 
 ## 5. What is RRF (Reciprocal Rank Fusion)?
 
-A score merging formula:
+Imagine two judges each ranking 10 contestants. Judge 1 says contestant A is #1. Judge 2 also says contestant A is #1. Clearly contestant A is the best!
+
+RRF is a formula that combines two "best of" lists into one final list:
 
 ```
-RRF_score(doc) = Σ 1 / (k + rank)
+Score = 1/(60 + rank from list 1) + 1/(60 + rank from list 2)
 ```
 
-Where `k=60` is a constant that dampens rank differences. A document ranked #1 in both BM25 and vector gets the highest fused score. It's parameter-light and works well in practice.
+A page ranked #1 by both keyword search AND meaning search gets the highest combined score. The number 60 is a "safety buffer" so that being ranked #1 vs #2 doesn't make a huge difference — overall ranking matters more than tiny differences.
 
 ---
 
 ## 6. What is the cross-encoder reranker and why use it?
 
-**Cross-encoder:** A transformer that takes `(query, passage)` as joint input and outputs a relevance score. More accurate than dot-product similarity but too slow to run on all documents.
+Think of it like a talent show with two rounds:
 
-**Strategy:** Run cheap retrieval (BM25 + vector) to get top-20 candidates, then run expensive cross-encoder only on those 20. Get accuracy of cross-encoder at the cost of ~20 inference calls.
+**Round 1 (fast, rough):** 1000 people audition quickly. Judges pick top 20. (BM25 + vector search)
 
-**Model used:** `cross-encoder/ms-marco-MiniLM-L-6-v2` — small, fast, trained on MS MARCO passage ranking.
+**Round 2 (slow, careful):** Those 20 perform properly in front of judges who pay full attention. Judges pick the best 4. (Cross-encoder reranker)
 
-**Scores:** Raw logits normalized via sigmoid → clean 0–100% relevance scores shown in UI.
+The cross-encoder reads your question AND the page together at the same time — like a judge who really listens. It's much more accurate but too slow to use on all 800 pages. So we only use it on the top 20 candidates from Round 1.
+
+**Score fix:** The reranker gives raw numbers that can be negative (-728). We run them through a "sigmoid" formula that squishes any number into a nice 0–100% range. So -728 becomes something like 6%, which makes sense to display.
 
 ---
 
 ## 7. What LLM and embeddings are used?
 
-| Component | Model | Provider |
-|-----------|-------|----------|
-| LLM | `amazon.nova-lite-v1:0` | AWS Bedrock |
-| Embeddings | `amazon.titan-embed-text-v1` | AWS Bedrock |
-| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | HuggingFace (local) |
+| What | Which one | Why |
+|------|-----------|-----|
+| The brain that answers questions | Amazon Nova Lite | Free to use on AWS, works immediately |
+| The "meaning converter" (embeddings) | Amazon Titan | Converts text → numbers |
+| The double-checker (reranker) | MiniLM cross-encoder | Small, fast, runs on your laptop |
 
-**Why Nova Lite?** All Anthropic Claude models require payment instrument verification on AWS. Nova Lite works immediately on the free tier.
+**Why not use ChatGPT?** This project uses AWS Bedrock — Amazon's AI service. We tried Claude (Anthropic's AI) but it was blocked because of payment setup issues. Amazon Nova Lite worked right away for free.
 
-**Nova vs Claude API differences:**
-- Nova request: `{"messages": [...], "inferenceConfig": {"max_new_tokens": N}}`
-- Nova content: `[{"text": "..."}]` (no `"type"` field)
-- Nova response: `result["output"]["message"]["content"][0]["text"]`
+**Nova vs Claude:** They speak slightly different "languages". Like how British English and American English are similar but different ("lift" vs "elevator"). We had to write translation code to support both.
 
 ---
 
 ## 8. How is async indexing implemented?
 
-```python
-# Returns instantly after S3 upload
-asyncio.get_event_loop().run_in_executor(
-    None, _index_document, job_id, content, filename, settings
-)
+"Async" means doing things in the background while you keep doing other things.
 
-# Background thread updates job status
-_jobs[job_id] = {"status": "indexing", ...}
-# ... after done:
-_jobs[job_id] = {"status": "done", "text_nodes": 914, ...}
+Imagine ordering pizza:
+- **Without async:** You stand at the door waiting until the pizza arrives. Can't do anything else.
+- **With async:** You order pizza, go watch TV. Pizza guy rings the bell when done.
 
-# UI polls every 5s
-GET /ingest/status/{job_id}
-```
+Our system works the same way:
 
-The upload returns in ~2s (S3 upload time). Indexing runs in a thread pool. UI polls until status is `"done"`.
+1. You upload a PDF → server says "Got it! Here's your order number: `abc123`" (instant, 2 seconds)
+2. Server starts reading and indexing the PDF in the background (takes ~4 minutes)
+3. Your browser checks every 5 seconds: "Is order `abc123` ready?"
+4. When done, it shows "914 chunks indexed ✓"
+
+This way the website doesn't freeze while waiting.
 
 ---
 
 ## 9. What was the biggest performance challenge and how did you fix it?
 
-**Problem:** Indexing a 369-page PDF took 10+ minutes.
+**Problem:** Uploading a 369-page PDF took over 10 minutes. Sometimes it never finished.
 
-**Root causes (found one by one):**
-1. `insert_nodes([node])` called one at a time → LlamaIndex called `_get_text_embedding` per node (sequential, 1.37s each × 11,327 nodes = 4+ hours)
-2. 11,327 nodes created (one per text block instead of per page)
-3. Image extraction rasterizing all 369 pages even when unused
-4. 20 parallel Bedrock calls → ThrottlingException
+**Investigation — found 4 bugs one by one:**
 
-**Fixes applied:**
-1. Merge text blocks by page → 800 nodes
-2. Pre-embed all nodes with parallel `ThreadPoolExecutor` (5 workers, respects rate limit)
-3. Skip image extraction
-4. Insert all nodes in one `insert_nodes(nodes)` call
+🐛 **Bug 1:** Creating 11,327 sticky notes (one per paragraph). Way too many.
+✅ Fix: One sticky note per page → 800 notes total.
 
-**Result:** ~4 minutes for 369 pages (rate-limited by AWS Bedrock free tier quota).
+🐛 **Bug 2:** Sending sticky notes to AWS one at a time for "meaning conversion". Each call takes 1.4 seconds. 11,327 × 1.4s = **4+ hours**!
+✅ Fix: Send 5 sticky notes to AWS at the same time. 5x faster.
+
+🐛 **Bug 3:** Converting every page into a photo even though we weren't using photos.
+✅ Fix: Skip photo extraction entirely.
+
+🐛 **Bug 4:** Sending 20 requests to AWS at the same time → AWS said "Too many requests! Slow down!"
+✅ Fix: Max 5 at a time with a tiny pause between groups.
+
+**Final result:** 369 pages indexed in ~4 minutes. Still slow because AWS free tier has limits — like a road with a speed limit.
 
 ---
 
 ## 10. What is LoRA finetuning used for?
 
-**LoRA (Low-Rank Adaptation)** finetunes BERT for financial Named Entity Recognition (NER).
+Imagine you have a really smart student who knows everything about general English. But you need them to become an expert at reading financial documents and spotting important words like company names, money amounts, and dates.
 
-Labels: `B-ORG`, `I-ORG`, `B-MONEY`, `I-MONEY`, `B-DATE`, `I-DATE`, `B-PERCENT`, `I-PERCENT`, `O`
+**Full training** = Make the student forget everything and re-learn from scratch. Very expensive, takes a long time.
 
-**Why LoRA?** Full BERT finetuning updates 110M parameters. LoRA freezes the base model and adds small low-rank matrices (rank=8) to attention layers — trains ~1% of parameters with similar accuracy.
+**LoRA** = Give the student a small "finance cheat sheet" (just 1% extra knowledge). They keep all their general knowledge but add new finance-specific skills. Much cheaper and faster!
 
-**Status:** Model not yet trained (`models/finrag-ner-lora` not present). NER endpoint returns 503 until trained.
+We use this to teach the AI to find:
+- **Company names** → "Infosys", "Tesla"
+- **Money amounts** → "₹1,36,592 crore", "$22,387 million"
+- **Dates** → "FY2025", "Q1 2026"
+- **Percentages** → "21.1%", "+51%"
+
+**Current status:** The cheat sheet hasn't been written yet (model not trained). This feature shows "unavailable" in the UI.
 
 ---
 
 ## 11. What does the Entities tab in the UI do?
 
-Sends text to `POST /entities` which runs the LoRA-finetuned BERT NER model. Returns tagged financial entities:
+It's like a highlighter pen that automatically highlights important financial words in any text you paste.
 
-```json
-[
-  {"text": "Infosys", "label": "ORG", "start": 0, "end": 7},
-  {"text": "₹1,36,592 crore", "label": "MONEY", "start": 20, "end": 36}
-]
-```
+You paste: *"Infosys reported revenue of ₹1,36,592 crore in FY2025"*
 
-Currently unavailable until the LoRA model is trained.
+It highlights:
+- 🔵 **Infosys** → Company name
+- 🟢 **₹1,36,592 crore** → Money amount
+- 🟡 **FY2025** → Date
+
+This is called **Named Entity Recognition (NER)**. Useful for quickly scanning documents without reading everything.
+
+Currently not working — needs the LoRA model to be trained first.
 
 ---
 
 ## 12. How is AWS integrated?
 
-| Service | Usage |
-|---------|-------|
-| S3 | Store uploaded PDFs (`pritam-finrag-docs` bucket) |
-| Bedrock | LLM inference (Nova Lite) + embeddings (Titan) |
-| Lambda | Async indexing handler (optional deployment) |
+AWS (Amazon Web Services) is like a giant set of tools you rent from Amazon. We use 3 tools:
 
-Credentials passed via environment variables, forwarded through `boto3.Session(**session_kwargs)` to all clients.
+| AWS Tool | What it does | Real-world analogy |
+|----------|-------------|-------------------|
+| **S3** | Stores your uploaded PDFs | Like Google Drive |
+| **Bedrock** | Runs the AI brain (Nova Lite) and meaning converter (Titan) | Like renting a supercomputer |
+| **Lambda** | Runs indexing code without a server | Like a vending machine — only works when you press a button |
+
+To use AWS, you need a "key" (like a password). The key is passed as environment variables — like secret codes typed into the terminal before starting the server.
 
 ---
 
 ## 13. What are the API endpoints?
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Server status + index loaded flag |
-| POST | `/ingest` | Upload PDF → returns job_id instantly |
-| GET | `/ingest/status/{job_id}` | Poll indexing progress |
-| POST | `/query` | Ask a question, get answer + sources |
-| POST | `/entities` | Extract financial NER entities |
+An API endpoint is like a button on a vending machine. Each button does one thing.
+
+| Button | What it does |
+|--------|-------------|
+| `GET /health` | "Is the machine on?" → Yes/No |
+| `POST /ingest` | "Here's a PDF, please read it" → Returns a job ticket |
+| `GET /ingest/status/{id}` | "Is my job done yet?" → Indexing / Done / Failed |
+| `POST /query` | "Answer this question" → Answer + sources |
+| `POST /entities` | "Highlight the important words" → List of entities |
+
+The UI (website) talks to these buttons behind the scenes when you click things.
 
 ---
 
 ## 14. What would you improve with more time?
 
-1. **Re-enable chart captioning** — OpenCLIP chart detection + Nova vision captioning for true multimodal Q&A
-2. **Train the LoRA NER model** — needs annotated financial text dataset
-3. **Increase Bedrock quota** — request higher TPS for faster indexing
-4. **Streaming responses** — stream LLM tokens to UI for faster perceived latency
-5. **Multi-document queries** — currently all documents share one index; add per-document filtering
-6. **Persistent job store** — `_jobs` dict is in-memory, lost on restart; use Redis or DB
-7. **Authentication** — no auth currently; add API keys or OAuth for production
+1. **Turn charts back on** — Right now charts in PDFs are ignored. Want to re-enable AI reading charts and describing what they show (e.g. "Revenue grew 50% from Q1 to Q3").
+
+2. **Train the highlighter** — The entity highlighter (LoRA model) needs to be trained on financial text before it works.
+
+3. **Ask AWS for a faster lane** — AWS limits how many requests we can make per second (like a speed limit). Can request a higher limit.
+
+4. **Show answers word by word** — Right now the full answer appears at once after 7 seconds. Could show it word-by-word as it's generated (like ChatGPT does).
+
+5. **Search one document at a time** — Right now all uploaded documents are mixed together. Should be able to say "only search the Tesla PDF".
+
+6. **Remember jobs after restart** — If the server restarts, all job statuses are forgotten. Should save them to a database.
+
+7. **Add passwords** — Right now anyone who knows the URL can upload and query. Should add login/authentication for real use.
