@@ -1167,7 +1167,7 @@ async function uploadFile(file) {
     return;
   }
 
-  setUploadStatus('loading', `Uploading ${file.name}…`);
+  setUploadStatus('loading', `Uploading ${file.name} to S3…`);
 
   const form = new FormData();
   form.append('file', file);
@@ -1182,13 +1182,56 @@ async function uploadFile(file) {
       return;
     }
 
-    setUploadStatus('success', `${file.name} ingested successfully`);
-    showToast(`"${d.filename}" ingested!`, 'success');
+    // Instant response — now poll for indexing progress
+    showToast(`"${d.filename}" uploaded! Indexing in background…`, 'success');
     addToHistory(d);
     fileInput.value = '';
+    pollJobStatus(d.job_id, d.filename);
   } catch (err) {
     setUploadStatus('error', 'Could not reach the API. Is the server running?');
     showToast('API unreachable', 'error');
+  }
+}
+
+async function pollJobStatus(jobId, filename) {
+  const maxAttempts = 120; // poll up to 10 min
+  let attempts = 0;
+
+  const poll = async () => {
+    attempts++;
+    try {
+      const r = await fetch(`${API}/ingest/status/${jobId}`);
+      const d = await r.json();
+
+      if (d.status === 'done') {
+        setUploadStatus('success', `✓ ${d.message}`);
+        showToast(`"${filename}" fully indexed!`, 'success');
+        updateHistoryItem(jobId, d);
+      } else if (d.status === 'failed') {
+        setUploadStatus('error', `Indexing failed: ${d.message}`);
+        showToast('Indexing failed', 'error');
+      } else if (attempts < maxAttempts) {
+        // still indexing
+        const dots = '.'.repeat((attempts % 3) + 1);
+        setUploadStatus('loading', `Indexing${dots} ${d.message || ''}`);
+        setTimeout(poll, 5000);
+      }
+    } catch (e) {
+      if (attempts < maxAttempts) setTimeout(poll, 5000);
+    }
+  };
+
+  setTimeout(poll, 3000);
+}
+
+function updateHistoryItem(jobId, data) {
+  const item = document.querySelector(`[data-job-id="${jobId}"]`);
+  if (!item) return;
+  const badge = item.querySelector('.file-badge');
+  if (badge) {
+    badge.textContent = `✓ ${data.text_nodes || 0} chunks${data.chart_nodes ? ' + ' + data.chart_nodes + ' charts' : ''}`;
+    badge.style.background = 'rgba(52,211,153,0.15)';
+    badge.style.color = '#34d399';
   }
 }
 
@@ -1199,11 +1242,12 @@ function addToHistory(data) {
 
   const item = document.createElement('div');
   item.className = 'uploaded-file';
+  item.dataset.jobId = data.job_id || '';
   item.innerHTML = `
     <span class="file-icon-sm">📄</span>
     <span class="file-name">${escHtml(data.filename)}</span>
     <span class="file-key">${escHtml(data.s3_key || data.job_id || '')}</span>
-    <span class="file-badge">Indexed</span>
+    <span class="file-badge">Indexing…</span>
   `;
   list.prepend(item);
 }

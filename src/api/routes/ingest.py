@@ -1,15 +1,16 @@
-"""POST /ingest — upload a PDF, extract text + charts, index into RAG pipeline."""
+"""POST /ingest — upload a PDF instantly, index in background."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Annotated
 
 import boto3
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from typing import Annotated
 
 from src.api.schemas import IngestResponse
 from src.config import Settings, get_settings
@@ -17,16 +18,23 @@ from src.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingestion"])
 
+# In-memory job status store  {job_id: {status, message, ...}}
+_jobs: dict[str, dict] = {}
+
+
+@router.get("/status/{job_id}", tags=["ingestion"], summary="Poll ingestion job status")
+async def ingest_status(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
 
 @router.post(
     "",
     response_model=IngestResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Upload a PDF and ingest (text + charts)",
-    description=(
-        "Accepts a PDF upload, stores it in S3, extracts text blocks and chart images, "
-        "captions charts with Claude Vision, then indexes everything into the RAG pipeline."
-    ),
+    summary="Upload a PDF — returns instantly, indexes in background",
 )
 async def ingest_document(
     file: Annotated[UploadFile, File(description="PDF file to ingest")],
@@ -43,14 +51,12 @@ async def ingest_document(
     filename = file.filename or f"upload_{uuid.uuid4().hex}.pdf"
     job_id = uuid.uuid4().hex
     s3_key = f"{settings.s3_prefix}{job_id}/{filename}"
-
     content = await file.read()
+
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
 
-    logger.info("Ingesting %s (%d bytes)", filename, len(content))
-
-    # ── Upload to S3 ──────────────────────────────────────────────────────────
+    # ── Upload to S3 (fast, synchronous) ──────────────────────────────────────
     try:
         session = boto3.Session(**settings.boto3_session_kwargs)
         s3 = session.client("s3")
@@ -73,56 +79,57 @@ async def ingest_document(
             detail=f"S3 upload failed: {exc.response['Error']['Message']}",
         )
 
-    # ── Full multimodal ingestion (text + charts) ─────────────────────────────
-    from fastapi import Request
-    from starlette.requests import Request as StarletteRequest
+    # ── Register job and kick off background indexing ─────────────────────────
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "filename": filename,
+        "status": "indexing",
+        "message": "Uploaded to S3. Indexing text and charts in background…",
+        "text_nodes": 0,
+        "chart_nodes": 0,
+    }
 
-    # Access app state via a workaround — get pipeline from app state
-    import src.api.main as _main_module
-    pipeline = getattr(_main_module.app.state, "pipeline", None)
-
-    text_nodes = 0
-    chart_nodes = 0
-    chart_captions = []
-
-    if pipeline is not None:
-        try:
-            result = pipeline.add_pdf_bytes(
-                content,
-                source=filename,
-                generate_chart_captions=True,
-            )
-            if isinstance(result, dict):
-                text_nodes = result.get("text_nodes", 0)
-                chart_nodes = result.get("chart_nodes", 0)
-                chart_captions = result.get("chart_captions", [])
-            else:
-                text_nodes = result
-            logger.info(
-                "Indexed %d text nodes + %d chart nodes from %s",
-                text_nodes, chart_nodes, filename,
-            )
-        except Exception as exc:
-            logger.error("Indexing failed: %s", exc, exc_info=True)
-            return IngestResponse(
-                job_id=job_id,
-                filename=filename,
-                s3_key=s3_key,
-                status="upload_ok_index_failed",
-                message=f"Uploaded to S3 but indexing failed: {exc}",
-            )
-    else:
-        logger.warning("Pipeline not available — document stored in S3 only")
-
-    parts = [f"{text_nodes} text chunks"]
-    if chart_nodes:
-        parts.append(f"{chart_nodes} charts captioned by Claude Vision")
-    summary = " + ".join(parts)
+    asyncio.get_event_loop().run_in_executor(
+        None, _index_document, job_id, content, filename, settings
+    )
 
     return IngestResponse(
         job_id=job_id,
         filename=filename,
         s3_key=s3_key,
-        status="indexed",
-        message=f"Successfully indexed {summary} from '{filename}'",
+        status="indexing",
+        message=f"'{filename}' uploaded. Indexing in background — poll /ingest/status/{job_id}",
     )
+
+
+def _index_document(job_id: str, content: bytes, filename: str, settings: Settings) -> None:
+    """Run in a thread pool — parse PDF, extract charts, index into RAG."""
+    import src.api.main as _main_module
+    pipeline = getattr(_main_module.app.state, "pipeline", None)
+
+    if pipeline is None:
+        _jobs[job_id].update({"status": "failed", "message": "Pipeline not available"})
+        return
+
+    try:
+        _jobs[job_id]["message"] = "Extracting text and detecting charts…"
+        result = pipeline.add_pdf_bytes(content, source=filename, generate_chart_captions=True)
+
+        text_nodes = result.get("text_nodes", 0) if isinstance(result, dict) else result
+        chart_nodes = result.get("chart_nodes", 0) if isinstance(result, dict) else 0
+
+        parts = [f"{text_nodes} text chunks"]
+        if chart_nodes:
+            parts.append(f"{chart_nodes} charts captioned")
+
+        _jobs[job_id].update({
+            "status": "done",
+            "message": f"Indexed {' + '.join(parts)} from '{filename}'",
+            "text_nodes": text_nodes,
+            "chart_nodes": chart_nodes,
+        })
+        logger.info("Background indexing complete for job %s", job_id)
+
+    except Exception as exc:
+        logger.error("Background indexing failed for job %s: %s", job_id, exc, exc_info=True)
+        _jobs[job_id].update({"status": "failed", "message": str(exc)})

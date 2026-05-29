@@ -123,8 +123,11 @@ class HybridRetriever(BaseRetriever):
         self, query: str, nodes: list[NodeWithScore]
     ) -> list[NodeWithScore]:
         """Score (query, passage) pairs with the cross-encoder and re-sort."""
+        import math
         pairs = [(query, node.node.get_content()) for node in nodes]
-        scores: list[float] = self._reranker.predict(pairs).tolist()
+        raw_scores: list[float] = self._reranker.predict(pairs).tolist()
+        # Sigmoid-normalize logits → [0, 1] range
+        scores = [1.0 / (1.0 + math.exp(-s)) for s in raw_scores]
 
         reranked = [
             NodeWithScore(node=nws.node, score=float(score))

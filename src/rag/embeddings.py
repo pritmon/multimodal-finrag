@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import boto3
@@ -125,16 +125,27 @@ class BedrockTitanEmbedding(BaseEmbedding):
             len(uncached_indices),
         )
 
-        for idx in uncached_indices:
-            text = texts[idx]
-            embedding = self._invoke_bedrock(text)
-            results[idx] = embedding
-
-            cache_key = _sha256(text)
-            if len(self._cache) >= self.cache_size:
-                oldest = next(iter(self._cache))
-                del self._cache[oldest]
-            self._cache[cache_key] = embedding
+        # Embed uncached texts in parallel batches (5 concurrent to stay under rate limit)
+        import time
+        CONCURRENCY = 5
+        for batch_start in range(0, len(uncached_indices), CONCURRENCY):
+            batch = uncached_indices[batch_start: batch_start + CONCURRENCY]
+            with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+                future_to_idx = {
+                    pool.submit(self._invoke_bedrock, texts[idx]): idx
+                    for idx in batch
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    embedding = future.result()
+                    results[idx] = embedding
+                    cache_key = _sha256(texts[idx])
+                    if len(self._cache) >= self.cache_size:
+                        oldest = next(iter(self._cache))
+                        del self._cache[oldest]
+                    self._cache[cache_key] = embedding
+            if batch_start + CONCURRENCY < len(uncached_indices):
+                time.sleep(0.2)  # brief pause between batches
 
         return results  # type: ignore[return-value]
 

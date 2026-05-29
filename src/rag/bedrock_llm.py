@@ -32,6 +32,15 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_text(result: dict) -> str:
+    """Extract text from either Claude or Amazon Nova response format."""
+    if "content" in result:  # Claude format
+        return result["content"][0]["text"]
+    if "output" in result:  # Amazon Nova format
+        return result["output"]["message"]["content"][0]["text"]
+    return ""
+
 _CLAUDE3_MODELS = {
     "anthropic.claude-3-sonnet-20240229-v1:0",
     "anthropic.claude-3-haiku-20240307-v1:0",
@@ -152,7 +161,7 @@ class BedrockLLM(CustomLLM):
             accept="application/json",
         )
         result = json.loads(response["body"].read())
-        text = result["content"][0]["text"]
+        text = _extract_text(result)
         return CompletionResponse(text=text, raw=result)
 
     @llm_completion_callback()
@@ -183,18 +192,28 @@ class BedrockLLM(CustomLLM):
 
     @llm_chat_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
-        anthropic_messages = _llama_messages_to_anthropic(messages)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "messages": anthropic_messages,
-        }
-        # Extract system message if present
-        system_msgs = [m for m in messages if m.role == MessageRole.SYSTEM]
-        if system_msgs:
-            body["system"] = system_msgs[0].content
+        anthropic_messages = _llama_messages_to_anthropic(messages, nova=self._is_nova())
+        if self._is_nova():
+            body = {
+                "messages": anthropic_messages,
+                "inferenceConfig": {
+                    "max_new_tokens": self.max_tokens,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                },
+            }
+        else:
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "messages": anthropic_messages,
+            }
+            # Extract system message if present (Claude only)
+            system_msgs = [m for m in messages if m.role == MessageRole.SYSTEM]
+            if system_msgs:
+                body["system"] = system_msgs[0].content
 
         response = self._client.invoke_model(
             modelId=self.model_id,
@@ -203,7 +222,7 @@ class BedrockLLM(CustomLLM):
             accept="application/json",
         )
         result = json.loads(response["body"].read())
-        text = result["content"][0]["text"]
+        text = _extract_text(result)
         return ChatResponse(
             message=ChatMessage(role=MessageRole.ASSISTANT, content=text),
             raw=result,
@@ -211,13 +230,22 @@ class BedrockLLM(CustomLLM):
 
     @llm_chat_callback()
     def stream_chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponseGen:
-        anthropic_messages = _llama_messages_to_anthropic(messages)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "messages": anthropic_messages,
-        }
+        anthropic_messages = _llama_messages_to_anthropic(messages, nova=self._is_nova())
+        if self._is_nova():
+            body = {
+                "messages": anthropic_messages,
+                "inferenceConfig": {
+                    "max_new_tokens": self.max_tokens,
+                    "temperature": self.temperature,
+                },
+            }
+        else:
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "messages": anthropic_messages,
+            }
 
         response = self._client.invoke_model_with_response_stream(
             modelId=self.model_id,
@@ -256,7 +284,29 @@ class BedrockLLM(CustomLLM):
 
     # ── Private ───────────────────────────────────────────────────────────────
 
+    def _is_nova(self) -> bool:
+        return "nova" in self.model_id.lower()
+
+    def _nova_content(self, claude_content: list[dict]) -> list[dict]:
+        """Convert Claude-format content blocks to Nova format (no 'type' key for text)."""
+        nova_blocks = []
+        for block in claude_content:
+            if block.get("type") == "text":
+                nova_blocks.append({"text": block["text"]})
+            else:
+                nova_blocks.append(block)  # images etc — pass through
+        return nova_blocks
+
     def _build_body(self, content: list[dict]) -> dict:
+        if self._is_nova():
+            return {
+                "messages": [{"role": "user", "content": self._nova_content(content)}],
+                "inferenceConfig": {
+                    "max_new_tokens": self.max_tokens,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                },
+            }
         return {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": self.max_tokens,
@@ -268,12 +318,16 @@ class BedrockLLM(CustomLLM):
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
-def _llama_messages_to_anthropic(messages: Sequence[ChatMessage]) -> list[dict]:
-    """Convert LlamaIndex ChatMessage list to Anthropic Messages API format."""
+def _llama_messages_to_anthropic(messages: Sequence[ChatMessage], nova: bool = False) -> list[dict]:
+    """Convert LlamaIndex ChatMessage list to Anthropic/Nova Messages API format."""
     result = []
     for msg in messages:
         if msg.role == MessageRole.SYSTEM:
             continue  # handled separately
         role = "user" if msg.role == MessageRole.USER else "assistant"
-        result.append({"role": role, "content": [{"type": "text", "text": msg.content}]})
+        if nova:
+            # Nova expects content as a list of {"text": "..."} without "type"
+            result.append({"role": role, "content": [{"text": msg.content}]})
+        else:
+            result.append({"role": role, "content": [{"type": "text", "text": msg.content}]})
     return result

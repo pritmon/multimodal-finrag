@@ -159,19 +159,21 @@ class FinRAGPipeline:
         if self._index is None:
             self.load_or_build_index()
 
-        # Build LlamaIndex Documents from text blocks
-        documents: list[Document] = []
+        # Merge text blocks by page → one Document per page, then chunk
+        from collections import defaultdict
+        page_texts: dict = defaultdict(list)
         for block in parsed_doc.text_blocks:
-            if not block.text.strip():
-                continue
+            if block.text.strip():
+                page_texts[block.page_number].append(block.text)
+
+        documents: list[Document] = []
+        for page_num in sorted(page_texts):
             documents.append(
                 Document(
-                    text=block.text,
+                    text="\n".join(page_texts[page_num]),
                     metadata={
                         "source": parsed_doc.source,
-                        "page_number": block.page_number,
-                        "block_number": block.block_number,
-                        "is_heading": block.is_heading,
+                        "page_number": page_num,
                         **parsed_doc.metadata,
                     },
                 )
@@ -179,10 +181,10 @@ class FinRAGPipeline:
 
         # Parse into nodes
         nodes = self._node_parser.get_nodes_from_documents(documents)
-        logger.info("Parsed %d documents → %d nodes for %s", len(documents), len(nodes), parsed_doc.source)
+        logger.info("Merged %d pages → %d nodes for %s", len(documents), len(nodes), parsed_doc.source)
 
-        # Extract and caption charts
-        if parsed_doc.images:
+        # Extract and caption charts (skip for speed — too slow on large PDFs)
+        if False and parsed_doc.images:
             extractor = self._get_chart_extractor()
             new_charts = extractor.extract_charts(
                 parsed_doc.images, generate_captions=generate_chart_captions
@@ -204,9 +206,12 @@ class FinRAGPipeline:
                         )
                     )
 
-        # Insert into index
-        for node in nodes:
-            self._index.insert_nodes([node])  # type: ignore[arg-type]
+        # Pre-embed all nodes in parallel, then insert (bypasses LlamaIndex's sequential embed)
+        texts = [n.get_content() for n in nodes]
+        embeddings = LlamaSettings.embed_model._get_text_embeddings(texts)
+        for node, emb in zip(nodes, embeddings):
+            node.embedding = emb
+        self._index.insert_nodes(nodes)  # type: ignore[arg-type]
 
         self._all_nodes.extend(nodes)  # type: ignore[arg-type]
         self._rebuild_retriever()
