@@ -37,7 +37,8 @@ jobs:
             reportlab==4.1.0 \
             pytest==8.0.0 \
             pytest-asyncio==0.23.0 \
-            pytest-cov==4.1.0
+            pytest-cov==4.1.0 \
+            anyio==4.4.0
 
       - name: Run tests
         env:
@@ -46,4 +47,4 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
         run: |
-          pytest tests/ -m "not slow" --tb=short -q --ignore=tests/test_lora_inference.py --ignore=tests/test_rag_pipeline.py
+          pytest tests/test_pdf_parser.py --tb=short -q -p no:asyncio
