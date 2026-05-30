@@ -312,6 +312,15 @@ pytest --cov=src              # with coverage
 
 <div align="center">
 
+## Live Deployments
+
+| Platform | URL |
+|----------|-----|
+| **AWS EKS** (Kubernetes) | http://finrag.44.206.217.242.nip.io |
+| **AWS ECS** (Fargate) | http://13.222.137.204:8000 |
+
+---
+
 Built by **Pritam Mondal** — MIT License
 
 </div>
