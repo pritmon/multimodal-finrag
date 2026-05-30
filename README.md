@@ -81,7 +81,7 @@ Question → BM25 Search ──┐
 ✅ **Free Embeddings** — Local `all-MiniLM-L6-v2`, no API cost  
 ✅ **AWS Native** — Bedrock LLM + Vision, S3, Lambda, DynamoDB, K8s ready  
 ✅ **Financial NER** — LoRA fine-tuned BERT for ORG / MONEY / DATE / PERCENT  
-✅ **Built-in UI** — Upload PDFs and query from browser at `http://localhost:8000`  
+✅ **Built-in UI** — Upload PDFs and query from browser at [finrag.44.206.217.242.nip.io](http://finrag.44.206.217.242.nip.io)  
 
 ---
 
@@ -140,24 +140,24 @@ BEDROCK_MODEL_ID=amazon.nova-lite-v1:0
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open **http://localhost:8000** — built-in UI to upload PDFs and run queries.
+Open **http://finrag.44.206.217.242.nip.io** — live UI to upload PDFs and run queries. Or use `http://localhost:8000` for local development.
 
 ### 4. Ingest a document
 
 ```bash
-curl -X POST http://localhost:8000/ingest \
+curl -X POST http://finrag.44.206.217.242.nip.io/ingest \
      -F "file=@annual_report.pdf"
 # → {"job_id": "abc123", "status": "processing"}
 
 # Poll for completion
-curl http://localhost:8000/ingest/status/abc123
+curl http://finrag.44.206.217.242.nip.io/ingest/status/abc123
 # → {"status": "done", "text_nodes": 905, "chart_nodes": 5}
 ```
 
 ### 5. Query
 
 ```bash
-curl -X POST http://localhost:8000/query \
+curl -X POST http://finrag.44.206.217.242.nip.io/query \
      -H "Content-Type: application/json" \
      -d '{"question": "What was the operating margin in FY2025 vs FY2024?"}'
 ```
@@ -165,7 +165,7 @@ curl -X POST http://localhost:8000/query \
 ### 6. Extract financial entities
 
 ```bash
-curl -X POST http://localhost:8000/entities \
+curl -X POST http://finrag.44.206.217.242.nip.io/entities \
      -H "Content-Type: application/json" \
      -d '{"text": "Infosys reported ₹1,62,990 crore revenue in FY2025 with 21.1% operating margin."}'
 ```
