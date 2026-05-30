@@ -1066,7 +1066,9 @@
 
 <script>
 /* ── Constants ──────────────────────────────────────────────────────── */
-const API = 'http://localhost:8000';
+const API = window.location.origin === 'null' || window.location.hostname === 'localhost'
+  ? 'http://localhost:8000'
+  : window.location.origin;
 
 /* ── Tab switching ──────────────────────────────────────────────────── */
 document.querySelectorAll('.tab-btn').forEach(btn => {

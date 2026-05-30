@@ -373,7 +373,7 @@ FastAPI Server (running in Kubernetes Pod on EKS)
 ```
 
 **Full flow:**
-1. You open `localhost:8000` (or a public URL if deployed on EKS)
+1. You open `http://finrag.44.206.217.242.nip.io` (EKS) or `http://13.222.137.204:8000` (ECS)
 2. Upload PDF → FastAPI saves it to S3 → Lambda triggers → indexes it
 3. Ask question → FastAPI retrieves chunks from index → sends to Bedrock Nova Lite → get answer
 4. Kubernetes keeps the FastAPI server always running, restarts if it crashes, scales if more users come

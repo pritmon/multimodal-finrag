@@ -5,6 +5,8 @@
 ### Turn any financial PDF into instant, cited answers — with chart and image understanding.
 
 [![Python CI](https://img.shields.io/github/actions/workflow/status/pritmon/multimodal-finrag/ci.yml?label=Python%20CI&logo=github)](https://github.com/pritmon/multimodal-finrag)
+[![Live on EKS](https://img.shields.io/badge/Live-AWS%20EKS-brightgreen?logo=amazonaws)](http://finrag.44.206.217.242.nip.io)
+[![Live on ECS](https://img.shields.io/badge/Live-AWS%20ECS-blue?logo=amazonaws)](http://13.222.137.204:8000)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-orange?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
