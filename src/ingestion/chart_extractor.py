@@ -106,7 +106,7 @@ class ChartExtractor:
         clip_model_name: str = "ViT-B-32",
         clip_pretrained: str = "openai",
         chart_threshold: float = 0.45,
-        bedrock_model_id: str = "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        bedrock_model_id: str = "amazon.nova-lite-v1:0",
         aws_region: str = "us-east-1",
         device: Optional[str] = None,
         session_kwargs: Optional[dict] = None,
@@ -152,28 +152,30 @@ class ChartExtractor:
             prompt_text += f"Context: this image comes from '{source_context}'. "
         prompt_text += "Description:"
 
-        body = json.dumps(
-            {
+        is_nova = "nova" in self.bedrock_model_id.lower()
+        if is_nova:
+            body = json.dumps({
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"image": {"format": "png", "source": {"bytes": img_b64}}},
+                        {"text": prompt_text},
+                    ],
+                }],
+                "inferenceConfig": {"max_new_tokens": 512},
+            })
+        else:
+            body = json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 512,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": img_b64,
-                                },
-                            },
-                            {"type": "text", "text": prompt_text},
-                        ],
-                    }
-                ],
-            }
-        )
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_b64}},
+                        {"type": "text", "text": prompt_text},
+                    ],
+                }],
+            })
 
         try:
             response = self._bedrock.invoke_model(
@@ -183,6 +185,8 @@ class ChartExtractor:
                 accept="application/json",
             )
             result = json.loads(response["body"].read())
+            if is_nova:
+                return result["output"]["message"]["content"][0]["text"].strip()
             return result["content"][0]["text"].strip()
         except Exception as exc:
             logger.warning("Bedrock captioning failed: %s", exc)
@@ -192,49 +196,52 @@ class ChartExtractor:
         self,
         images: list,  # list of EmbeddedImage from pdf_parser
         generate_captions: bool = True,
+        max_charts: int = 5,
     ) -> list[ChartNode]:
-        """Filter chart images and optionally generate captions for each."""
-        chart_nodes: list[ChartNode] = []
+        """Filter chart images and optionally generate captions in parallel.
 
+        Caps at max_charts to keep indexing fast (each caption = 1 Bedrock call).
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Step 1: detect charts with CLIP (fast, local)
+        detected_imgs = []
         for emb_img in images:
             pil = emb_img.image
             detected, score, top_label = self.is_chart(pil)
-            if not detected:
-                logger.debug(
-                    "Image p%d/i%d classified as non-chart (score=%.3f, top=%s)",
-                    emb_img.page_number,
-                    emb_img.image_index,
-                    score,
-                    top_label,
-                )
-                continue
+            if detected:
+                logger.info("Chart p%d score=%.3f type=%s", emb_img.page_number, score, top_label)
+                detected_imgs.append((emb_img, score, top_label))
 
-            logger.info(
-                "Chart detected p%d/i%d score=%.3f type=%s",
-                emb_img.page_number,
-                emb_img.image_index,
-                score,
-                top_label,
-            )
+        # Cap to top max_charts by CLIP score
+        detected_imgs.sort(key=lambda x: x[1], reverse=True)
+        detected_imgs = detected_imgs[:max_charts]
+        logger.info("Captioning %d/%d detected charts", len(detected_imgs), len(images))
 
-            img_bytes = emb_img.to_bytes("PNG")
+        # Step 2: caption in parallel (Bedrock calls)
+        def _caption_one(item):
+            emb_img, score, top_label = item
             caption = ""
             if generate_captions:
-                caption = self.caption_chart(pil, source_context=emb_img.source)
-
-            chart_nodes.append(
-                ChartNode(
-                    image_bytes=img_bytes,
-                    caption=caption,
-                    chart_type=top_label,
-                    clip_score=score,
-                    page_number=emb_img.page_number,
-                    image_index=emb_img.image_index,
-                    source=emb_img.source,
-                    width=pil.width,
-                    height=pil.height,
-                )
+                caption = self.caption_chart(emb_img.image, source_context=emb_img.source)
+            return ChartNode(
+                image_bytes=emb_img.to_bytes("PNG"),
+                caption=caption,
+                chart_type=top_label,
+                clip_score=score,
+                page_number=emb_img.page_number,
+                image_index=emb_img.image_index,
+                source=emb_img.source,
+                width=emb_img.image.width,
+                height=emb_img.image.height,
             )
+
+        chart_nodes: list[ChartNode] = []
+        if detected_imgs:
+            with ThreadPoolExecutor(max_workers=min(5, len(detected_imgs))) as pool:
+                futures = [pool.submit(_caption_one, item) for item in detected_imgs]
+                for f in as_completed(futures):
+                    chart_nodes.append(f.result())
 
         return chart_nodes
 

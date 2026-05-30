@@ -160,8 +160,8 @@ class PDFParser:
             page_blocks = self._extract_text_blocks(page, page_idx, source)
             text_blocks.extend(page_blocks)
 
-            # page_images = self._extract_images(doc, page, page_idx, source)
-            # images.extend(page_images)
+            page_images = self._extract_images(doc, page, page_idx, source)
+            images.extend(page_images)
 
         doc.close()
         logger.info(

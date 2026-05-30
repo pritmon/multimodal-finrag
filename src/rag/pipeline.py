@@ -100,11 +100,7 @@ class FinRAGPipeline:
             temperature=self.cfg.bedrock_temperature,
             session_kwargs=self.cfg.boto3_session_kwargs,
         )
-        self._embed_model = BedrockTitanEmbedding(
-            model_id=self.cfg.bedrock_embed_model_id,
-            aws_region=self.cfg.aws_region,
-            session_kwargs=self.cfg.boto3_session_kwargs,
-        )
+        self._embed_model = BedrockTitanEmbedding()  # LocalEmbedding (all-MiniLM-L6-v2)
 
         LlamaSettings.llm = self._llm
         LlamaSettings.embed_model = self._embed_model
@@ -183,8 +179,8 @@ class FinRAGPipeline:
         nodes = self._node_parser.get_nodes_from_documents(documents)
         logger.info("Merged %d pages → %d nodes for %s", len(documents), len(nodes), parsed_doc.source)
 
-        # Extract and caption charts (skip for speed — too slow on large PDFs)
-        if False and parsed_doc.images:
+        # Extract and caption charts (parallel, capped at 5 charts for speed)
+        if parsed_doc.images:
             extractor = self._get_chart_extractor()
             new_charts = extractor.extract_charts(
                 parsed_doc.images, generate_captions=generate_chart_captions
