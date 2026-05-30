@@ -1,84 +1,85 @@
-# Multimodal Financial RAG
+<div align="center">
 
-A production-grade **Retrieval-Augmented Generation** system that turns financial PDFs into instant, cited answers — with full chart and figure understanding.
+# 🧠 Multimodal Financial RAG
 
-Upload an annual report, ask a question, get a precise answer with source citations in seconds — grounded entirely in the document, no hallucinations.
+### Turn any financial PDF into instant, cited answers — with chart and image understanding.
 
-**Example:**
-> "What was Infosys operating margin in FY2025 vs FY2024?"
-> → "Infosys operating margin improved from **20.7% in FY2024** to **21.1% in FY2025**. [Source 2]"
+[![Python CI](https://img.shields.io/github/actions/workflow/status/pritmon/multimodal-finrag/ci.yml?label=Python%20CI&logo=github)](https://github.com/pritmon/multimodal-finrag)
+[![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-orange?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker&logoColor=white)](https://docker.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+</div>
 
 ---
 
-## How It Works (Two Phases)
+## What is this?
 
-**Ingest Phase (run once per document):**
-1. Extract text blocks and embedded images from PDF (PyMuPDF)
-2. Detect charts using CLIP zero-shot classification
-3. Caption charts with Amazon Nova / Claude Vision via Bedrock
-4. Chunk text into overlapping nodes merged by page (~800 nodes per 369-page report)
-5. Embed nodes locally with `all-MiniLM-L6-v2` (384-dim, no API cost, ~3 seconds for 800 chunks)
-6. Persist vector index to disk
+Financial analysts spend **days** reading dense annual reports, 10-Ks, and earnings releases.
 
-**Query Phase (every question):**
-1. **BM25 Search** — keyword matching
-2. **Vector Search** — semantic similarity (local sentence-transformers)
-3. **RRF Fusion** — combines both ranked lists
-4. **Cross-Encoder Reranking** — picks the most relevant chunks
-5. **Amazon Nova Lite** — generates grounded answer with source citations
-6. If charts are on the same page as retrieved chunks → sent as images to Bedrock Vision
+**Multimodal Financial RAG** reads those documents for you — including the charts and figures. Upload a PDF, ask a question, and get a precise answer with the exact source it came from — in under 5 seconds.
+
+> *"What was Infosys operating margin in FY2025 vs FY2024?"*
+> → **"Operating margin improved from 20.7% (FY2024) to 21.1% (FY2025). [Source 2, Page 42]"**
+
+It doesn't guess. It only answers from what's in the document — text **and** images.
+
+---
+
+## What makes it multimodal?
+
+Most RAG systems only read text. This one reads **both**:
+
+| Input Type | How it's handled |
+|------------|-----------------|
+| 📄 **Text** | PyMuPDF extracts paragraphs, tables, numbers — chunked and indexed |
+| 🖼️ **Images** | CLIP detects charts/figures → Bedrock Vision captions them → included in search and answer |
+
+So when you ask *"what was the revenue trend?"*, it finds the bar chart on that page, sends it to the LLM as an image, and explains it alongside the text.
+
+---
+
+## How It Works
+
+**Ingest Phase** (run once per document):
+
+```
+PDF → PyMuPDF → Text Blocks + Images
+                     │                └── CLIP Chart Detection
+                     │                         └── Bedrock Vision Captioning
+                     ▼
+              Page-level Chunks (~800 nodes per 369-page report)
+                     ▼
+         all-MiniLM-L6-v2 Embeddings (local, ~3 seconds)
+                     ▼
+              Vector Index (disk-persisted)
+```
+
+**Query Phase** (every question):
+
+```
+Question → BM25 Search ──┐
+         → Vector Search ─┤ RRF Fusion → Cross-Encoder Rerank → Nova Lite LLM → Answer + Citations
+                          │                                          ↑
+                    Chart images on same page ──────────────────────┘
+```
 
 ---
 
 ## Key Features
 
-✅ **Multimodal** — Understands charts, graphs, and figures (CLIP + Bedrock Vision)  
+✅ **Multimodal** — Reads text, images, charts, and figures from PDFs  
 ✅ **Hybrid Search** — BM25 + dense vector + Reciprocal Rank Fusion  
-✅ **Cross-Encoder Reranking** — Only top chunks sent to LLM  
-✅ **Grounded Answers** — No hallucinations, cited directly from document  
+✅ **Cross-Encoder Reranking** — Only the most relevant chunks sent to LLM  
+✅ **Grounded Answers** — No hallucinations, every answer cited from the document  
 ✅ **Fast Indexing** — 369-page PDF indexed in under 1 minute  
-✅ **Async Ingestion** — Background job with polling endpoint  
-✅ **Local Embeddings** — No embedding API cost (sentence-transformers)  
-✅ **AWS Native** — Bedrock LLM, S3, Lambda, DynamoDB, K8s ready  
+✅ **Async Ingestion** — Background job with real-time status polling  
+✅ **Free Embeddings** — Local `all-MiniLM-L6-v2`, no API cost  
+✅ **AWS Native** — Bedrock LLM + Vision, S3, Lambda, DynamoDB, K8s ready  
 ✅ **Financial NER** — LoRA fine-tuned BERT for ORG / MONEY / DATE / PERCENT  
 ✅ **Built-in UI** — Upload PDFs and query from browser at `http://localhost:8000`  
-
----
-
-## Project Structure
-
-```
-multimodal-finrag/
-├── src/
-│   ├── config.py                  # Pydantic settings (all env vars)
-│   ├── ingestion/
-│   │   ├── pdf_parser.py          # PyMuPDF text + image extraction
-│   │   ├── chart_extractor.py     # CLIP chart detection + Bedrock captioning
-│   │   └── s3_loader.py           # S3 upload/download/presigned URLs
-│   ├── rag/
-│   │   ├── bedrock_llm.py         # LlamaIndex CustomLLM for Bedrock (Claude 3 + Nova)
-│   │   ├── embeddings.py          # Local sentence-transformers embedding (no API)
-│   │   ├── retriever.py           # Hybrid BM25 + vector + cross-encoder reranker
-│   │   └── pipeline.py            # End-to-end RAG pipeline
-│   ├── finetune/
-│   │   ├── dataset.py             # Financial NER dataset + synthetic data generator
-│   │   ├── lora_trainer.py        # LoRA fine-tuning with PEFT + seqeval metrics
-│   │   └── inference.py           # Entity extraction inference engine
-│   ├── lambda_handler/
-│   │   ├── handler.py             # Lambda S3 event handler
-│   │   └── Dockerfile             # Container image for Lambda
-│   └── api/
-│       ├── main.py                # FastAPI app with lifespan
-│       ├── schemas.py             # Pydantic v2 request/response models
-│       └── routes/
-│           ├── ingest.py          # POST /ingest (async background job)
-│           ├── query.py           # POST /query
-│           └── entities.py        # POST /entities (NER)
-├── k8s/                           # Kubernetes manifests (HPA, Ingress, PVC)
-├── scripts/                       # CLI tools (build index, deploy lambda, train LoRA)
-├── artifacts/                     # Q&A docs, evaluation reports
-└── tests/                         # pytest test suite
-```
 
 ---
 
@@ -120,40 +121,38 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env — add your AWS credentials and region
+# Edit .env — add your AWS credentials
 ```
 
-Minimum required in `.env`:
-```
+Minimum required:
+```env
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=your_key
 AWS_SECRET_ACCESS_KEY=your_secret
 BEDROCK_MODEL_ID=amazon.nova-lite-v1:0
 ```
 
-### 3. Start the API server
+### 3. Start the server
 
 ```bash
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open **http://localhost:8000** in your browser — the built-in UI lets you upload PDFs and run queries directly.
+Open **http://localhost:8000** — built-in UI to upload PDFs and run queries.
 
 ### 4. Ingest a document
 
 ```bash
 curl -X POST http://localhost:8000/ingest \
      -F "file=@annual_report.pdf"
-# Returns: {"job_id": "abc123", "status": "processing"}
-```
+# → {"job_id": "abc123", "status": "processing"}
 
-Poll for completion:
-```bash
+# Poll for completion
 curl http://localhost:8000/ingest/status/abc123
-# Returns: {"status": "done", "text_nodes": 905, "chart_nodes": 5}
+# → {"status": "done", "text_nodes": 905, "chart_nodes": 5}
 ```
 
-### 5. Query the document
+### 5. Query
 
 ```bash
 curl -X POST http://localhost:8000/query \
@@ -175,33 +174,62 @@ curl -X POST http://localhost:8000/entities \
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Serve built-in UI |
+| `/` | GET | Built-in UI |
 | `/health` | GET | Health check + index status |
 | `/ingest` | POST | Upload PDF (async background job) |
 | `/ingest/status/{job_id}` | GET | Poll job progress |
 | `/query` | POST | RAG query with source citations |
 | `/entities` | POST | Financial NER extraction |
-| `/docs` | GET | Swagger API documentation |
+| `/docs` | GET | Swagger API docs |
 
-**Request body for `/query`:**
+**Response from `/query`:**
 ```json
 {
-  "question": "Your question here",
-  "top_k": 8
+  "answer": "Operating margin improved from 20.7% (FY2024) to 21.1% (FY2025). [Source 2]",
+  "sources": [
+    { "text": "...chunk...", "score": 0.91, "metadata": { "page_number": 42 } }
+  ],
+  "charts": [
+    { "caption": "Bar chart showing segment revenue by geography...", "page_number": 15 }
+  ]
 }
 ```
 
-**Response:**
-```json
-{
-  "answer": "Infosys operating margin improved from 20.7% (FY2024) to 21.1% (FY2025). [Source 2]",
-  "sources": [
-    { "text": "...chunk text...", "score": 0.91, "metadata": { "page_number": 42 } }
-  ],
-  "charts": [
-    { "caption": "Bar chart showing segment revenue...", "page_number": 15, "image_b64": "..." }
-  ]
-}
+---
+
+## Project Structure
+
+```
+multimodal-finrag/
+├── src/
+│   ├── config.py                  # Pydantic settings
+│   ├── ingestion/
+│   │   ├── pdf_parser.py          # PyMuPDF text + image extraction
+│   │   ├── chart_extractor.py     # CLIP detection + Bedrock captioning
+│   │   └── s3_loader.py           # S3 upload/download
+│   ├── rag/
+│   │   ├── bedrock_llm.py         # LlamaIndex CustomLLM (Claude 3 + Nova)
+│   │   ├── embeddings.py          # Local sentence-transformers embedding
+│   │   ├── retriever.py           # Hybrid BM25 + vector + reranker
+│   │   └── pipeline.py            # End-to-end RAG pipeline
+│   ├── finetune/
+│   │   ├── dataset.py             # Financial NER dataset + synthetic data
+│   │   ├── lora_trainer.py        # LoRA fine-tuning with PEFT
+│   │   └── inference.py           # NER inference engine
+│   ├── lambda_handler/
+│   │   ├── handler.py             # Lambda S3 event handler
+│   │   └── Dockerfile
+│   └── api/
+│       ├── main.py                # FastAPI app
+│       ├── schemas.py             # Pydantic v2 models
+│       └── routes/
+│           ├── ingest.py          # POST /ingest
+│           ├── query.py           # POST /query
+│           └── entities.py        # POST /entities
+├── k8s/                           # Kubernetes manifests
+├── scripts/                       # CLI tools
+├── artifacts/                     # Q&A docs, evaluation reports
+└── tests/                         # pytest suite
 ```
 
 ---
@@ -216,14 +244,10 @@ curl -X POST http://localhost:8000/entities \
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
-      ],
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
       "Resource": [
         "arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-*",
-        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-*"
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-*"
       ]
     },
     {
@@ -235,27 +259,18 @@ curl -X POST http://localhost:8000/entities \
 }
 ```
 
-### Enable Bedrock models
-
-In the AWS Console → Bedrock → Model Access, enable:
-- `Amazon Nova Lite` (recommended — used for queries and chart captioning)
-- `Anthropic Claude 3 Sonnet` (alternative)
+Enable in AWS Console → Bedrock → Model Access: **Amazon Nova Lite** (or Claude 3 Sonnet)
 
 ---
 
-## Kubernetes Deployment
+## Performance
 
-```bash
-# Apply all manifests
-kubectl apply -k k8s/
-
-# Verify
-kubectl -n finrag get pods
-kubectl -n finrag get hpa
-
-# Logs
-kubectl -n finrag logs -l app=finrag-api --tail=100
-```
+| Metric | Value |
+|--------|-------|
+| Indexing — 369-page PDF | ~41 seconds |
+| Embedding — 800 chunks | ~3 seconds (local, free) |
+| Charts detected per document | up to 5 (parallel captioning) |
+| Query latency | ~4 seconds |
 
 ---
 
@@ -263,10 +278,10 @@ kubectl -n finrag logs -l app=finrag-api --tail=100
 
 | Label | Description | Example |
 |-------|-------------|---------|
-| `B-ORG` / `I-ORG` | Organisation name | *Infosys*, *Tesla* |
-| `B-MONEY` / `I-MONEY` | Monetary amount | *₹1,62,990 crore*, *$22.4 billion* |
-| `B-DATE` / `I-DATE` | Date or fiscal period | *Q1 2026*, *FY2025* |
-| `B-PERCENT` / `I-PERCENT` | Percentage figure | *21.1%*, *40 basis points* |
+| `B-ORG` / `I-ORG` | Organisation | *Infosys*, *Tesla* |
+| `B-MONEY` / `I-MONEY` | Monetary amount | *₹1,62,990 crore*, *$22.4B* |
+| `B-DATE` / `I-DATE` | Date / fiscal period | *Q1 2026*, *FY2025* |
+| `B-PERCENT` / `I-PERCENT` | Percentage | *21.1%*, *40 bps* |
 
 ---
 
@@ -275,43 +290,28 @@ kubectl -n finrag logs -l app=finrag-api --tail=100
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AWS_REGION` | `us-east-1` | AWS region |
-| `AWS_ACCESS_KEY_ID` | — | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | — | AWS secret key |
-| `S3_BUCKET` | `finrag-documents` | Document storage bucket |
 | `BEDROCK_MODEL_ID` | `amazon.nova-lite-v1:0` | Generation model |
-| `INDEX_PERSIST_DIR` | `./index_store` | Vector index storage path |
+| `INDEX_PERSIST_DIR` | `./index_store` | Vector index path |
 | `LORA_MODEL_PATH` | `./models/finrag-ner-lora` | NER adapter path |
-| `RETRIEVER_TOP_K` | `8` | Documents retrieved per query |
-| `RERANKER_TOP_N` | `4` | Documents after reranking |
+| `RETRIEVER_TOP_K` | `8` | Chunks retrieved per query |
+| `RERANKER_TOP_N` | `4` | Chunks after reranking |
 | `CHUNK_SIZE` | `512` | Token chunk size |
-| `CHUNK_OVERLAP` | `64` | Token overlap between chunks |
-
----
-
-## Performance
-
-| Metric | Value |
-|--------|-------|
-| Indexing speed (369-page PDF) | ~41 seconds |
-| Embedding speed (800 chunks) | ~3 seconds (local, no API cost) |
-| Charts detected & captioned | Up to 5 per document (parallel) |
-| Query latency | ~4 seconds |
+| `CHUNK_OVERLAP` | `64` | Token overlap |
 
 ---
 
 ## Running Tests
 
 ```bash
-# All tests
-pytest
-
-# Fast tests only
-pytest -m "not slow"
-
-# With coverage
-pytest --cov=src --cov-report=html
+pytest                        # all tests
+pytest -m "not slow"          # skip model-loading tests
+pytest --cov=src              # with coverage
 ```
 
 ---
 
+<div align="center">
+
 Built by **Pritam Mondal** — MIT License
+
+</div>
