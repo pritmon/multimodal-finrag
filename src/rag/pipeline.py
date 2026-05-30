@@ -295,7 +295,10 @@ class FinRAGPipeline:
             images = [Image.open(io.BytesIO(c.image_bytes)) for c in relevant_charts]
             answer = self._llm.complete_with_images(full_prompt, images=images)
         else:
+            # Call Bedrock directly — bypass LlamaIndex chat routing
             answer = self._llm.complete(full_prompt).text
+            if not answer:
+                answer = "Unable to generate an answer from the provided context."
 
         return QueryResult(
             answer=answer,

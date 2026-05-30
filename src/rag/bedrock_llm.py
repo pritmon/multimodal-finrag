@@ -133,7 +133,7 @@ class BedrockLLM(CustomLLM):
         return LLMMetadata(
             context_window=200_000,
             num_output=self.max_tokens,
-            is_chat_model=True,
+            is_chat_model=False,  # Use complete() not chat() to avoid LlamaIndex routing issues
             is_function_calling_model=False,
             model_name=self.model_id,
         )
@@ -193,8 +193,10 @@ class BedrockLLM(CustomLLM):
     @llm_chat_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
         anthropic_messages = _llama_messages_to_anthropic(messages, nova=self._is_nova())
+        system_msgs = [m for m in messages if m.role == MessageRole.SYSTEM]
+
         if self._is_nova():
-            body = {
+            body: dict = {
                 "messages": anthropic_messages,
                 "inferenceConfig": {
                     "max_new_tokens": self.max_tokens,
@@ -202,6 +204,8 @@ class BedrockLLM(CustomLLM):
                     "top_p": self.top_p,
                 },
             }
+            if system_msgs:
+                body["system"] = [{"text": system_msgs[0].content}]
         else:
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
@@ -210,8 +214,6 @@ class BedrockLLM(CustomLLM):
                 "top_p": self.top_p,
                 "messages": anthropic_messages,
             }
-            # Extract system message if present (Claude only)
-            system_msgs = [m for m in messages if m.role == MessageRole.SYSTEM]
             if system_msgs:
                 body["system"] = system_msgs[0].content
 
@@ -288,13 +290,21 @@ class BedrockLLM(CustomLLM):
         return "nova" in self.model_id.lower()
 
     def _nova_content(self, claude_content: list[dict]) -> list[dict]:
-        """Convert Claude-format content blocks to Nova format (no 'type' key for text)."""
+        """Convert Claude-format content blocks to Nova format."""
         nova_blocks = []
         for block in claude_content:
             if block.get("type") == "text":
                 nova_blocks.append({"text": block["text"]})
-            else:
-                nova_blocks.append(block)  # images etc — pass through
+            elif block.get("type") == "image":
+                # Nova image format: {"image": {"format": "png", "source": {"bytes": b64}}}
+                src = block.get("source", {})
+                nova_blocks.append({
+                    "image": {
+                        "format": src.get("media_type", "image/png").split("/")[-1],
+                        "source": {"bytes": src.get("data", "")},
+                    }
+                })
+            # skip unknown block types
         return nova_blocks
 
     def _build_body(self, content: list[dict]) -> dict:
@@ -319,15 +329,25 @@ class BedrockLLM(CustomLLM):
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 def _llama_messages_to_anthropic(messages: Sequence[ChatMessage], nova: bool = False) -> list[dict]:
-    """Convert LlamaIndex ChatMessage list to Anthropic/Nova Messages API format."""
+    """Convert LlamaIndex ChatMessage list to Anthropic/Nova Messages API format.
+
+    Merges consecutive same-role messages (Nova requires strict user/assistant alternation).
+    """
     result = []
     for msg in messages:
         if msg.role == MessageRole.SYSTEM:
-            continue  # handled separately
+            continue  # handled separately in body
         role = "user" if msg.role == MessageRole.USER else "assistant"
+        content = msg.content or ""
         if nova:
-            # Nova expects content as a list of {"text": "..."} without "type"
-            result.append({"role": role, "content": [{"text": msg.content}]})
+            block = {"text": content}
         else:
-            result.append({"role": role, "content": [{"type": "text", "text": msg.content}]})
+            block = {"type": "text", "text": content}
+
+        # Merge consecutive same-role messages
+        if result and result[-1]["role"] == role:
+            result[-1]["content"].append(block)
+        else:
+            result.append({"role": role, "content": [block]})
+
     return result
