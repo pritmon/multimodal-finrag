@@ -32,4 +32,4 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/test_pdf_parser.py -v --tb=long -p no:asyncio -p no:anyio --override-ini="asyncio_mode=strict" --override-ini="addopts="
+          pytest tests/test_pdf_parser.py -v --tb=long -p no:asyncio --override-ini="addopts="
