@@ -51,20 +51,19 @@ So when you ask *"What was the revenue trend?"*, the system finds the bar chart 
 ```mermaid
 flowchart TD
 
+    %% ── INPUT ───────────────────────────────────────────────────────────────
     User(["👤 User"])
+    Question["❓ Question\n'What was Apple revenue in Q3 2023?'"]
+    PDF["📄 Upload PDF\nApple_Annual_Report.pdf"]
 
-    Web["🌐 Web Browser"]
-    App["📱 API Client"]
+    User --> Question & PDF
 
-    User --> Web & App
+    %% ── CLIENT ──────────────────────────────────────────────────────────────
+    Web["🌐 Web Browser  /  📱 API Client"]
+    Question --> Web
+    PDF       --> Web
 
-    subgraph APIM["⚙️ API Management — src/api/"]
-        direction LR
-        Analytics["📊 Analytics\nCloudWatch"]
-        Gateway["🔀 API Gateway\nmain.py"]
-        Catalog["📂 API Catalog\nSwagger /docs"]
-    end
-
+    %% ── API ENDPOINTS ───────────────────────────────────────────────────────
     subgraph Endpoints["🔌 API Endpoints — src/api/routes/"]
         direction LR
         E1["📥 POST /ingest\ningest.py"]
@@ -72,38 +71,58 @@ flowchart TD
         E3["🏷️ POST /entities\nentities.py"]
     end
 
-    Web & App --> Endpoints
+    Web --> E1 & E2 & E3
+
+    %% ── API MANAGEMENT ──────────────────────────────────────────────────────
+    subgraph APIM["⚙️ API Management — src/api/main.py"]
+        direction LR
+        Analytics["📊 CloudWatch\nAnalytics"]
+        Gateway["🔀 API Gateway\nCORS · Routing"]
+        Catalog["📂 Swagger /docs\nAPI Catalog"]
+    end
+
     Endpoints --> APIM
 
+    %% ── BACKENDS ────────────────────────────────────────────────────────────
     subgraph Backends["☁️ API Backends"]
         direction LR
 
         subgraph RAG["🧠 RAG Pipeline — src/rag/"]
             direction TB
-            P1["pdf_parser.py\nRead PDF"]
-            P2["embeddings.py\nText to Vectors"]
-            P3["retriever.py\nBM25 + Vector + Rerank"]
-            P4["bedrock_llm.py\nNova Lite — Generate Answer"]
-            P1 --> P2 --> P3 --> P4
+            R1["📄 pdf_parser.py\nExtract Text + Images"]
+            R2["🔢 embeddings.py\nText → 384-dim Vectors"]
+            R3["🔍 retriever.py\nBM25 + Vector + Reranker\nTop 4 Chunks"]
+            R4["🤖 bedrock_llm.py\nNova Lite — Write Answer"]
+            R1 --> R2 --> R3 --> R4
         end
 
-        subgraph Storage["💾 Storage — AWS"]
+        subgraph Store["💾 AWS Storage"]
             direction TB
-            S1[("S3\nPDF Files")]
-            S2[("FAISS Index\nVectors")]
-            S3[("DynamoDB\nMetadata")]
+            S1[("🪣 S3\nPDF Files")]
+            S2[("🗄️ FAISS Index\nVectors on Disk")]
+            S3[("📋 DynamoDB\nMetadata")]
         end
 
-        Charts["🖼️ chart_extractor.py\nOpenCLIP + Bedrock Vision"]
-        NER["🏷️ inference.py\nLoRA BERT NER"]
+        Charts["🖼️ chart_extractor.py\nOpenCLIP detects chart\nNova Vision captions it"]
         Lambda["⚡ lambda_handler.py\nAuto-index on S3 upload"]
     end
 
     APIM --> RAG
     APIM --> Charts
-    APIM --> NER
-    RAG --> Storage
-    S1 --> Lambda --> S2
+    RAG  --> Store
+    S1   --> Lambda --> S2
+    Charts --> R4
+
+    %% ── OUTPUT ──────────────────────────────────────────────────────────────
+    subgraph Output["✅ Response back to User"]
+        direction LR
+        A1["💬 Answer\n'Revenue was $89.5B in Q3 2023\n— up 2% YoY'"]
+        A2["📌 Source Citation\nPage 42 · Score 0.94"]
+        A3["🖼️ Chart Image\nQuarterly Revenue Bar Chart\n+ AI Caption"]
+    end
+
+    R4 --> Output
+    Output -->|"JSON response"| User
 ```
 
 ---
