@@ -49,52 +49,92 @@ So when you ask *"What was the revenue trend?"*, the system finds the bar chart 
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart TD
-    User(["👤 User\nBrowser / API"])
-    User -->|HTTP| API
+flowchart LR
 
-    subgraph API["🌐 FastAPI — AWS EKS / ECS"]
-        Ingest["📥 POST /ingest\nUpload PDF"]
-        Query["🔍 POST /query\nAsk question"]
-        NER["🏷️ POST /entities\nExtract NER"]
+    %% ── Left: Users & Clients ──────────────────────────────────────────────
+    User(["👤 User"])
+
+    subgraph Clients["Client Layer"]
+        direction TB
+        Web["🌐 Web Browser\nindex.html"]
+        Mobile["📱 API Client\ncURL / SDK"]
     end
 
-    subgraph Ingest_Pipeline["📥 Ingest Pipeline  •  src/ingestion/ + src/rag/"]
-        PDF["📄 PDF"] --> PyMuPDF["pdf_parser.py\nPyMuPDF — Text + Images"]
-        PyMuPDF --> Text["📝 Text Blocks"]
-        PyMuPDF --> Images["🖼️ Images"]
-        Images --> CLIP["chart_extractor.py\nOpenCLIP — Chart Detection"]
-        CLIP --> Vision["chart_extractor.py\nBedrock Nova — Chart Captioning"]
-        Text --> Chunks["pipeline.py\n800 Page Chunks"]
-        Vision --> Chunks
-        Chunks --> Embed["embeddings.py\nall-MiniLM-L6-v2 (local, free)"]
-        Embed --> Index[("pipeline.py\nFAISS Vector Index\n+ BM25 Index")]
+    User --> Web
+    User --> Mobile
+
+    %% ── Middle: API Endpoints ──────────────────────────────────────────────
+    subgraph Endpoints["API Endpoints  •  src/api/routes/"]
+        direction TB
+        E1["📥 POST /ingest\ningest.py"]
+        E2["🔍 POST /query\nquery.py"]
+        E3["🏷️ POST /entities\nentities.py"]
     end
 
-    subgraph Query_Pipeline["🔍 Query Pipeline  •  src/rag/"]
-        Q["❓ Question"] --> BM25["retriever.py\nBM25 Search\nExact keywords"]
-        Q --> VecSearch["retriever.py\nVector Search\nSemantic meaning"]
-        BM25 --> RRF["retriever.py\nRRF Fusion\nMerge ranked lists"]
-        VecSearch --> RRF
-        RRF --> Rerank["retriever.py\nCross-Encoder Reranker\nTop 4 chunks"]
-        Rerank --> LLM["bedrock_llm.py\nAmazon Nova Lite\nAWS Bedrock"]
-        LLM --> Answer["💬 Answer + Page Citations + Charts"]
+    Web --> E1
+    Web --> E2
+    Mobile --> E2
+    Mobile --> E3
+
+    %% ── Centre: API Management ─────────────────────────────────────────────
+    subgraph APIM["⚙️ API Management  •  src/api/"]
+        direction TB
+
+        Analytics["📊 API Analytics\nCloudWatch Logs\nLatency · Error rate"]
+
+        subgraph GW["🔀 API Gateway  •  main.py"]
+            direction TB
+            GW1(("fa:fa-circle"))
+            GW2(("fa:fa-circle"))
+            GW3(("fa:fa-circle"))
+            GW1 --> GW2
+            GW1 --> GW3
+        end
+
+        Catalog["📂 API Catalog\nSwagger /docs\nReDoc /redoc"]
     end
 
-    subgraph AWS["☁️ AWS Services"]
-        S3["🪣 S3\npritam-finrag-docs"]
-        Bedrock["🤖 Bedrock\nNova Lite + Vision"]
+    E1 --> GW
+    E2 --> GW
+    E3 --> GW
+
+    %% ── Right: API Backends ────────────────────────────────────────────────
+    subgraph Backends["☁️ API Backends"]
+        direction TB
+
+        subgraph RAG["RAG Engine  •  src/rag/"]
+            direction TB
+            Parser["📄 pdf_parser.py\nPyMuPDF — Text + Images"]
+            Embed["🔢 embeddings.py\nall-MiniLM-L6-v2"]
+            Retriever["🔍 retriever.py\nBM25 + Vector + Reranker"]
+            LLM["🤖 bedrock_llm.py\nAmazon Nova Lite"]
+            Parser --> Embed --> Retriever --> LLM
+        end
+
+        subgraph Store["Storage"]
+            direction TB
+            VectorDB[("🗄️ FAISS Index\nindex_store/")]
+            S3DB[("🪣 AWS S3\npritam-finrag-docs")]
+            DynDB[("📋 DynamoDB\nDocument Metadata")]
+        end
+
+        Charts["🖼️ chart_extractor.py\nOpenCLIP + Bedrock Vision"]
         Lambda["⚡ lambda_handler/handler.py\nAuto-index on S3 upload"]
-        CW["📊 CloudWatch\nLogs & Monitoring"]
     end
 
-    Ingest --> Ingest_Pipeline
-    Query --> Query_Pipeline
-    Index --> Query_Pipeline
-    Ingest_Pipeline --> S3
-    Ingest_Pipeline --> Bedrock
-    Query_Pipeline --> Bedrock
-    S3 --> Lambda --> Index
+    GW --> RAG
+    GW --> Charts
+    RAG --> Store
+    S3DB --> Lambda --> VectorDB
+
+    %% ── Styling ────────────────────────────────────────────────────────────
+    style Clients   fill:#f0f4ff,stroke:#94a3b8,stroke-width:1.5px
+    style Endpoints fill:#f0fdf4,stroke:#86efac,stroke-width:1.5px
+    style APIM      fill:#fffbeb,stroke:#fcd34d,stroke-width:2px,stroke-dasharray:6
+    style GW        fill:#fef9c3,stroke:#fbbf24,stroke-width:1px
+    style Backends  fill:#fdf4ff,stroke:#d8b4fe,stroke-width:2px,stroke-dasharray:6
+    style RAG       fill:#f5f3ff,stroke:#c4b5fd,stroke-width:1px
+    style Store     fill:#f0fdf4,stroke:#86efac,stroke-width:1px
 ```
 
 ---
