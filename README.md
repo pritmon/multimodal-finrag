@@ -46,61 +46,55 @@ So when you ask *"what was the revenue trend?"*, it finds the bar chart on that 
 
 ## Architecture
 
-<div align="center">
+```mermaid
+flowchart TD
+    User(["👤 User\nBrowser / API"])
 
-```
-                        ┌─────────────────────────┐
-                        │       👤  YOU            │
-                        │   Browser  /  curl       │
-                        └────────────┬────────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │   🌐  FastAPI App    │
-                          │   AWS EKS · ECS      │
-                          └──┬──────┬────────┬──┘
-                             │      │        │
-               ┌─────────────┘      │        └─────────────┐
-               ▼                    ▼                       ▼
-        📥 /ingest            🔍 /query               🏷️ /entities
-        Upload PDF            Ask question            Extract NER
-               │                    │
-               │                    │
-    ╔══════════▼══════════╗   ╔══════▼═════════════════════════════╗
-    ║   INGEST PIPELINE   ║   ║          QUERY PIPELINE            ║
-    ╠═════════════════════╣   ╠════════════════════════════════════╣
-    ║                     ║   ║                                    ║
-    ║  📄 PDF             ║   ║  ❓ Question                       ║
-    ║   └── PyMuPDF       ║   ║         │                          ║
-    ║        ├── Text ────╫───╫──► 🔤 BM25 Search (keywords)      ║
-    ║        └── Images   ║   ║         │                          ║
-    ║             │       ║   ║    🧠 Vector Search (meaning)      ║
-    ║          🔍 CLIP    ║   ║         │                          ║
-    ║      chart detect   ║   ║    ⚡ RRF Fusion (merge both)      ║
-    ║             │       ║   ║         │                          ║
-    ║      👁️ Bedrock     ║   ║   🎯 Cross-Encoder Rerank         ║
-    ║        Vision       ║   ║      (best 4 chunks)               ║
-    ║      captioning     ║   ║         │                          ║
-    ║             │       ║   ║   🤖 Nova Lite (Bedrock)           ║
-    ║   📦 800 chunks     ║   ║         │                          ║
-    ║             │       ║   ║   💬 Answer + Sources + Charts     ║
-    ║  🔢 Embeddings      ║   ║                                    ║
-    ║   all-MiniLM-L6-v2  ║   ╚════════════════════════════════════╝
-    ║   (384-dim, local)  ║
-    ║             │       ║
-    ║  🗄️ Vector Index    ║
-    ║   (disk-persisted)  ║
-    ╚═════════════════════╝
-               │
-    ┌──────────▼────────────────────────────────────────────┐
-    │                  ☁️  AWS SERVICES                      │
-    ├──────────────┬──────────────┬───────────┬─────────────┤
-    │ 🪣 S3        │ 🤖 Bedrock   │ ⚡ Lambda │ 📊 CloudWatch│
-    │ Store PDFs   │ Nova LLM     │ Auto-index│ Logs        │
-    │              │ + Vision     │ on upload │             │
-    └──────────────┴──────────────┴───────────┴─────────────┘
-```
+    User -->|HTTP| API
 
-</div>
+    subgraph API["🌐 FastAPI — AWS EKS / ECS"]
+        Ingest["📥 POST /ingest\nUpload PDF"]
+        Query["🔍 POST /query\nAsk question"]
+        NER["🏷️ POST /entities\nExtract NER"]
+    end
+
+    subgraph Ingest_Pipeline["📥 Ingest Pipeline"]
+        PDF["📄 PDF"] --> PyMuPDF["PyMuPDF\nText + Images"]
+        PyMuPDF --> Text["📝 Text Blocks"]
+        PyMuPDF --> Images["🖼️ Images"]
+        Images --> CLIP["🔍 OpenCLIP\nChart Detection"]
+        CLIP --> Vision["👁️ Bedrock Vision\nChart Captioning"]
+        Text --> Chunks["📦 800 Page Chunks"]
+        Vision --> Chunks
+        Chunks --> Embed["🔢 all-MiniLM-L6-v2\nEmbeddings (local, free)"]
+        Embed --> Index[("🗄️ Vector Index\ndisk-persisted")]
+    end
+
+    subgraph Query_Pipeline["🔍 Query Pipeline"]
+        Q["❓ Question"] --> BM25["🔤 BM25 Search\nExact keywords"]
+        Q --> VecSearch["🧠 Vector Search\nSemantic meaning"]
+        BM25 --> RRF["⚡ RRF Fusion\nMerge ranked lists"]
+        VecSearch --> RRF
+        RRF --> Rerank["🎯 Cross-Encoder Reranker\nTop 4 chunks"]
+        Rerank --> LLM["🤖 Amazon Nova Lite\nAWS Bedrock"]
+        LLM --> Answer["💬 Answer + Page Citations + Charts"]
+    end
+
+    subgraph AWS["☁️ AWS Services"]
+        S3["🪣 S3\npritam-finrag-docs\nPDF Storage"]
+        Bedrock["🤖 Bedrock\nNova Lite LLM\n+ Vision API"]
+        Lambda["⚡ Lambda\nAuto-index on\nS3 upload"]
+        CW["📊 CloudWatch\nLogs & Monitoring"]
+    end
+
+    Ingest --> Ingest_Pipeline
+    Query --> Query_Pipeline
+    Index --> Query_Pipeline
+    Ingest_Pipeline --> S3
+    Ingest_Pipeline --> Bedrock
+    Query_Pipeline --> Bedrock
+    S3 --> Lambda --> Index
+```
 
 ---
 
