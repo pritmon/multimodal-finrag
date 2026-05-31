@@ -1,13 +1,30 @@
-# AWS, Bedrock & Kubernetes — Explained Simply
-### For someone completely new 🌱
+# ☁️ AWS, Bedrock & Kubernetes — Interview Q&A Guide
+
+> Explained simply — like teaching a 15-year-old — with real examples from the **multimodal-finrag** project.
+> Every concept has an analogy, a real-world example, and code/config from this repo.
 
 ---
 
-## PART 1 — AWS (Amazon Web Services)
+## 🗂️ Quick Navigation
+
+| Colour | Section | Topics |
+|--------|---------|--------|
+| 🔵 | [AWS Fundamentals](#-aws-fundamentals) | What is AWS, S3, IAM, Regions, Free Tier |
+| 🟣 | [AWS Bedrock & AI Models](#-aws-bedrock--ai-models) | Bedrock, Nova Lite, Titan Embeddings, Throttling |
+| 🟢 | [AWS Compute & Serverless](#-aws-compute--serverless) | Lambda, boto3, ECS vs EKS |
+| 🔴 | [Kubernetes Fundamentals](#-kubernetes-k8s-fundamentals) | Containers, Pods, Deployments, Services |
+| 🟠 | [Kubernetes Advanced](#-kubernetes-advanced) | HPA, EKS, kubectl, Ingress |
+| 🔷 | [Full Architecture](#-how-it-all-connects-in-this-project) | End-to-end flow, cheat sheet |
 
 ---
 
-### What is AWS?
+## 🔵 AWS Fundamentals
+
+---
+
+### 🔵 Q1 — What is AWS and why do companies use it?
+
+💡 **Think of AWS like a rental shop for computers.**
 
 Imagine you want to open a restaurant. You need:
 - A kitchen (server/computer)
@@ -15,39 +32,51 @@ Imagine you want to open a restaurant. You need:
 - A phone line (networking)
 - A billing system
 
-You could buy all this yourself. Very expensive. Or you could **rent** it from someone who already has everything built.
+You could buy all this yourself — very expensive. Or you could **rent** it from someone who already has everything built.
 
 **AWS = Amazon's rental shop for computers, storage, and internet tools.**
 
-You pay only for what you use. No upfront cost. Netflix, Airbnb, NASA — they all use AWS.
+| Without AWS | With AWS |
+|---|---|
+| Buy servers upfront ($10,000+) | Pay per hour (cents) |
+| Hire ops team to manage hardware | AWS manages it |
+| Takes weeks to set up | Minutes to deploy |
+| Fixed capacity | Scale up/down instantly |
+
+Netflix, Airbnb, NASA — they all use AWS. In this project we use AWS for storage (S3), AI (Bedrock), containers (EKS/ECS), and serverless (Lambda).
 
 ---
 
-### AWS Free Tier — What is it?
+### 🔵 Q2 — What is the AWS Free Tier?
 
-When you create an AWS account, Amazon gives you **free usage** for 12 months on many services. Like a free trial.
+💡 **Think of it as a 12-month free trial.**
 
-In this project we use:
-- **S3** — 5GB free storage
-- **Bedrock** — limited free calls per month
-- **EC2** — 750 hours/month of a small computer
+When you create an AWS account, Amazon gives you free usage for 12 months on many services.
 
-After free tier ends, you pay. That's why we got throttled — too many requests on the free plan.
+| Service | Free Tier Limit |
+|---|---|
+| S3 | 5 GB storage + 20,000 GET requests/month |
+| Bedrock | Limited model invocations per month |
+| EC2 | 750 hours/month of `t2.micro` instance |
+| Lambda | 1 million requests/month free forever |
+
+> ⚠️ **Lesson learned:** We hit throttling during bulk PDF indexing — 800 chunks × Titan Embeddings exceeded the free-tier rate limit. Fix: batch with delays.
 
 ---
 
-### What is S3?
+### 🔵 Q3 — What is S3 and how is it used in this project?
 
-**S3 = Simple Storage Service**
+💡 **Think of S3 as Google Drive for developers.**
 
-It's like Google Drive but for developers. You store files (called "objects") in "buckets" (like folders).
+**S3 = Simple Storage Service.** You store files (called "objects") in "buckets" (like folders).
 
 In this project:
-- Bucket name: `pritam-finrag-docs`
-- When you upload a PDF, it goes to S3 first
-- Key (file path): `documents/{job_id}/infosys_annual_report_2025.pdf`
+- **Bucket:** `pritam-finrag-docs`
+- **Purpose:** Store uploaded financial PDFs before indexing
+- **Key format:** `documents/{job_id}/infosys_annual_report_2025.pdf`
 
 ```python
+# From src/ingestion/s3_loader.py
 s3.put_object(
     Bucket="pritam-finrag-docs",
     Key="documents/abc123/infosys.pdf",
@@ -55,136 +84,188 @@ s3.put_object(
 )
 ```
 
-**Why S3?** Durable (99.999999999% uptime), cheap (~$0.023/GB/month), accessible from anywhere.
+| Local Disk | S3 |
+|---|---|
+| Lost if server crashes | 99.999999999% durable |
+| Not shared between pods | Accessible from anywhere |
+| Fixed size | Unlimited storage |
+| ~$50/month for a big disk | ~$0.023/GB/month |
 
 ---
 
-### What is IAM?
+### 🔵 Q4 — What is IAM and why does it matter?
 
-**IAM = Identity and Access Management**
+💡 **Think of IAM as the security guard of AWS.**
 
-It's the security guard of AWS. Controls WHO can do WHAT.
+**IAM = Identity and Access Management.** It controls WHO can do WHAT on AWS.
 
-- **User** = A person or app with an identity
-- **Access Key** = Like a username + password for code (not humans)
-- **Policy** = Rules about what the user can do
+| Concept | Meaning | Example in this project |
+|---|---|---|
+| User | An identity (person or app) | `finrag-app-user` |
+| Access Key | Username for code | `AWS_ACCESS_KEY_ID` |
+| Secret Key | Password for code | `AWS_SECRET_ACCESS_KEY` |
+| Policy | Rules about what's allowed | "Can read S3, call Bedrock" |
+| Role | Permissions attached to a service | `finrag-task-execution-role` |
 
-In this project we use:
-- `AWS_ACCESS_KEY_ID` = who we are
-- `AWS_SECRET_ACCESS_KEY` = our password
-- These give access to S3 and Bedrock
-
-**Golden rule:** Never commit these to GitHub. We learned this the hard way — GitHub blocked our push because it detected the keys.
-
----
-
-### What is a Region?
-
-AWS has data centers all over the world — called **regions**.
-
-- `us-east-1` = North Virginia, USA (what we use)
-- `ap-south-1` = Mumbai, India
-- `eu-west-1` = Ireland
-
-You pick the region closest to your users for fastest speed. Bedrock's Nova Lite model is only available in certain regions — that's why we use `us-east-1`.
+> ⚠️ **Golden Rule:** Never commit keys to GitHub. GitHub's secret scanner auto-blocked our push when it detected a key in the code.
 
 ---
 
-## PART 2 — AWS Bedrock
+### 🔵 Q5 — What is an AWS Region and why does it matter?
+
+💡 **Think of regions as Amazon's offices in different cities.**
+
+| Region Code | Location |
+|---|---|
+| `us-east-1` | North Virginia, USA ← **we use this** |
+| `ap-south-1` | Mumbai, India |
+| `eu-west-1` | Ireland |
+| `ap-southeast-1` | Singapore |
+
+**Why `us-east-1`?**
+- Bedrock's Nova Lite model is only available in certain regions
+- All AWS resources (S3, EKS, ECS, ECR) must be in the same region to avoid latency and extra cost
 
 ---
 
-### What is AWS Bedrock?
+## 🟣 AWS Bedrock & AI Models
 
-Bedrock is AWS's service for using AI models without building them yourself.
+---
 
-Think of it like a **AI model vending machine**:
-- You put in text (your question)
-- It runs a powerful AI model
-- You get back an answer
-- You pay per 1000 words processed
+### 🟣 Q6 — What is AWS Bedrock?
+
+💡 **Think of Bedrock as an AI model vending machine.**
+
+You send in text → Bedrock runs the AI model → you get back an answer → you pay per 1,000 tokens.
 
 **Models available on Bedrock:**
-- Amazon Nova (what we use — works immediately)
-- Anthropic Claude (blocked for us — needs payment verification)
-- Meta Llama
-- Mistral
-- Stability AI (for images)
+
+| Model | Made by | Used in this project? |
+|---|---|---|
+| Nova Lite | Amazon | ✅ Yes — answers questions |
+| Titan Embeddings | Amazon | ✅ Yes — converts text to vectors |
+| Claude 3.5 Sonnet | Anthropic | ❌ Needs payment verification |
+| Llama 3 | Meta | ❌ Not used |
+
+```python
+# From src/rag/bedrock_llm.py
+bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
+response = bedrock.invoke_model(
+    modelId="amazon.nova-lite-v1:0",
+    body=json.dumps({"messages": [{"role": "user", "content": prompt}]})
+)
+```
 
 ---
 
-### What is Amazon Nova Lite?
+### 🟣 Q7 — What is Amazon Nova Lite?
 
-Nova Lite is Amazon's own AI model. Like ChatGPT but made by Amazon.
+💡 **Think of Nova Lite as ChatGPT made by Amazon.**
 
-- **Fast** — responds in 2-7 seconds
-- **Cheap** — costs very little per request
-- **Good enough** — handles Q&A on documents well
+| Property | Value |
+|---|---|
+| Model ID | `amazon.nova-lite-v1:0` |
+| Response time | 2–7 seconds |
+| Max context | 300K tokens |
+| Cost | ~$0.06 per million input tokens |
+| Access | Available immediately on free tier |
 
-We use it to:
-1. Read the retrieved document chunks
-2. Understand the question
-3. Write a clear answer
+**Why not Claude?** Claude models on Bedrock require payment method verification. Nova Lite works immediately — that's why we chose it.
 
----
-
-### What is Amazon Titan Embeddings?
-
-"Embedding" = converting text into a list of 1536 numbers that represent its meaning.
-
-**Why numbers?** Computers can't compare meanings of words directly. But they can compare numbers. Two sentences with similar meanings will have similar numbers.
-
-Example:
-- "Tesla revenue" → [0.23, -0.45, 0.78, ...] (1536 numbers)
-- "Tesla income" → [0.24, -0.44, 0.77, ...] (very similar numbers!)
-- "Pizza recipe" → [0.91, 0.12, -0.33, ...] (very different numbers)
-
-Amazon Titan converts every chunk of your PDF into these numbers. Then when you ask a question, it converts your question too, and finds the chunks with the most similar numbers.
+**What Nova Lite does in this project:**
+1. Receives the retrieved document chunks (context)
+2. Understands your question
+3. Writes a grounded answer — only from the document, never guesses
 
 ---
 
-### What is Bedrock's Rate Limit (Throttling)?
+### 🟣 Q8 — What are embeddings and what is Amazon Titan?
 
-AWS limits how many requests you can make per second. Like a highway speed limit.
+💡 **Think of embeddings as GPS coordinates for the meaning of text.**
 
-**Free tier limit for Titan Embeddings:** ~5 requests/second
+A computer can't compare the "meaning" of two sentences. But it can compare numbers. **Embeddings = converting text into numbers that represent meaning.**
 
-That's why indexing takes ~4 minutes for 800 chunks:
-- 800 chunks ÷ 5 per second = 160 seconds minimum
-- Plus processing time = ~4 minutes total
+```
+"Tesla revenue 2024"     → [0.23, -0.45, 0.78, ...]  ← 1536 numbers
+"Tesla income this year" → [0.24, -0.44, 0.77, ...]  ← very similar ✅
+"Pizza recipe"           → [0.91,  0.12, -0.33, ...]  ← very different ❌
+```
 
-**Error we saw:** `ThrottlingException: Too many requests`
+```python
+# From src/rag/embeddings.py
+response = bedrock.invoke_model(
+    modelId="amazon.titan-embed-text-v1",
+    body=json.dumps({"inputText": chunk_text})
+)
+embedding = json.loads(response["body"].read())["embedding"]  # 1536 floats
+```
 
-**Fix:** Send max 5 requests at a time, pause 0.2s between batches.
-
-To get faster: Request a quota increase from AWS Support (free, takes 1-2 days).
-
----
-
-### What is AWS Lambda?
-
-Lambda = Run code without managing a server.
-
-Normal server: You rent a computer 24/7. Costs money even when idle.
-
-Lambda: Your code only runs when triggered. Pay only for the seconds it runs.
-
-**In this project:** Lambda is set up as an alternative for background indexing. When a PDF is uploaded to S3, Lambda automatically triggers and indexes it. Like a motion sensor light — only turns on when needed.
-
-We didn't fully use Lambda in our demo (used background threads instead), but the code is written in `src/lambda_handler/handler.py`.
+Amazon Titan converts every PDF chunk into 1536 numbers. When you ask a question, it converts your question too — then finds chunks with the most similar numbers.
 
 ---
 
-### What is boto3?
+### 🟣 Q9 — What is throttling and how did we handle it?
 
-`boto3` = The Python library to talk to AWS services.
+💡 **Think of throttling as a speed limit on a highway.**
 
-Like a TV remote — you press buttons (call functions) and it sends signals (API calls) to AWS.
+**Error we saw:**
+```
+ThrottlingException: Too many requests. Please try again later.
+```
+
+| Service | Free Tier Rate Limit |
+|---|---|
+| Titan Embeddings | ~5 requests/second |
+| Nova Lite | ~10 requests/second |
+
+**Impact:** 800 chunks ÷ 5 per second = 160 seconds = ~4 minutes to index one document.
+
+**Fix — process in batches:**
+```python
+BATCH_SIZE = 5
+for i in range(0, len(chunks), BATCH_SIZE):
+    batch = chunks[i:i + BATCH_SIZE]
+    embeddings = [embed(chunk) for chunk in batch]
+    time.sleep(0.2)  # pause between batches
+```
+
+**Long-term fix:** Request a quota increase from AWS Support — free, takes 1–2 days.
+
+---
+
+## 🟢 AWS Compute & Serverless
+
+---
+
+### 🟢 Q10 — What is AWS Lambda?
+
+💡 **Think of Lambda as a motion-sensor light — only turns on when needed.**
+
+| Feature | Lambda | Always-on Server |
+|---|---|---|
+| Cost when idle | $0.00 | Keeps charging |
+| Setup | Upload code, done | Install OS, configure |
+| Max runtime | 15 minutes | Unlimited |
+| Best for | Short tasks, event-driven | APIs, long-running processes |
+
+**In this project** — Lambda triggers when a PDF lands in S3:
+```
+PDF uploaded to S3 → S3 Event → Lambda triggers → Indexes PDF in background
+```
+
+Code lives in `src/lambda_handler/handler.py`. We used background threads for the demo, but Lambda is the production-grade approach.
+
+---
+
+### 🟢 Q11 — What is boto3?
+
+💡 **Think of boto3 as the TV remote for AWS.**
+
+`boto3` is the official Python library to interact with all AWS services.
 
 ```python
 import boto3
 
-# Create a session with your credentials
 session = boto3.Session(
     aws_access_key_id="AKIAXXX",
     aws_secret_access_key="secretXXX",
@@ -193,212 +274,352 @@ session = boto3.Session(
 
 # Use S3
 s3 = session.client("s3")
-s3.put_object(Bucket="my-bucket", Key="file.pdf", Body=data)
+s3.put_object(Bucket="pritam-finrag-docs", Key="file.pdf", Body=data)
 
 # Use Bedrock
 bedrock = session.client("bedrock-runtime")
 response = bedrock.invoke_model(modelId="amazon.nova-lite-v1:0", body=...)
 ```
 
----
-
-## PART 3 — Kubernetes (K8s)
-
----
-
-### What is Kubernetes?
-
-Imagine you have a food delivery app. On a normal day, 100 people order. On New Year's Eve, 10,000 people order. You need:
-- More delivery bikes (servers) on busy days
-- Fewer on quiet days
-- If one bike breaks, send another automatically
-
-**Kubernetes = The manager that handles all of this automatically.**
-
-It runs your app in "containers" (boxes) and manages:
-- How many boxes are running
-- Restarting boxes that crash
-- Sharing traffic between boxes
-- Scaling up/down based on demand
+Used across this project:
+- `src/ingestion/s3_loader.py` — upload/download PDFs
+- `src/rag/bedrock_llm.py` — call Nova Lite for answers
+- `src/rag/embeddings.py` — call Titan for embeddings
+- `src/ingestion/chart_extractor.py` — call Bedrock Vision for chart captions
 
 ---
 
-### What is a Container?
+### 🟢 Q12 — ECS vs EKS — what's the difference?
 
-A container = A box that has your app + everything it needs to run.
+💡 **ECS = Amazon's simpler container runner. EKS = Full Kubernetes managed by Amazon.**
 
-Think of it like a **lunchbox**:
-- Regular food: your app code
-- Lunchbox: container (includes Python, libraries, everything)
-- Anyone can open the same lunchbox and get the same food
+| Feature | ECS | EKS |
+|---|---|---|
+| Setup difficulty | Easy (10 min) | Hard (30–60 min) |
+| Kubernetes | No — Amazon's own system | Yes — full K8s |
+| Auto-scaling | Basic | Advanced (HPA) |
+| Cost | Lower | Higher (control plane fee) |
+| Best for | Simple apps | Complex microservices |
+| Our live URL | http://13.222.137.204:8000 | http://finrag.44.206.217.242.nip.io |
 
-**Docker** makes the lunchbox. **Kubernetes** manages thousands of lunchboxes.
+**In this project we deployed to both** — ECS first (simpler), EKS second (production-grade).
 
-In this project, you'd package the FastAPI app in a Docker container:
+---
+
+## 🔴 Kubernetes (K8s) Fundamentals
+
+---
+
+### 🔴 Q13 — What is Kubernetes?
+
+💡 **Think of Kubernetes as a smart manager for your app.**
+
+Imagine you have a food delivery app:
+- Normal day: 100 orders → 2 servers needed
+- New Year's Eve: 10,000 orders → 20 servers needed
+- One server crashes → traffic should automatically go to another
+
+**Kubernetes handles all of this without you doing anything.**
+
+| What K8s does | How it helps |
+|---|---|
+| Runs multiple copies of your app | No single point of failure |
+| Restarts crashed containers | Always available |
+| Scales up when traffic spikes | Never overloaded |
+| Scales down when quiet | Saves money |
+| Distributes traffic evenly | Fast responses |
+
+---
+
+### 🔴 Q14 — What is a Docker Container?
+
+💡 **Think of a container as a lunchbox for your app.**
+
+A container packages your app + Python + all libraries into one portable box. Anyone can run the same box and get the exact same app.
+
+**Dockerfile in this project** (multi-stage — keeps the final image slim):
 ```dockerfile
-FROM python:3.9
-COPY . /app
-RUN pip install -r requirements.txt
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0"]
+# Stage 1: Install everything
+FROM python:3.11-slim AS builder
+RUN pip install fastapi uvicorn PyMuPDF boto3 sentence-transformers
+
+# Stage 2: Copy only what's needed to run
+FROM python:3.11-slim AS runtime
+COPY --from=builder /usr/local/lib/python3.11/site-packages .
+COPY src/ ./src/
+USER finrag        # non-root user for security
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**Why multi-stage?** Builder stage can be 3 GB. Runtime stage is ~800 MB. Smaller = faster deploys + cheaper ECR storage.
+
+---
+
+### 🔴 Q15 — What is a Pod?
+
+💡 **Think of a Pod as one delivery bike with one rider.**
+
+A Pod is the smallest unit in Kubernetes — usually one running container.
+
+- If the rider falls sick (container crashes) → Kubernetes automatically sends a new rider
+- Pods are **temporary** — they can be killed and replaced anytime
+- Each Pod gets its own internal IP address
+
+```yaml
+# k8s/deployment.yaml
+containers:
+- name: finrag-api
+  image: 020262236277.dkr.ecr.us-east-1.amazonaws.com/finrag-api:latest
+  ports:
+  - containerPort: 8000
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
 ```
 
 ---
 
-### What is a Pod?
+### 🔴 Q16 — What is a Deployment?
 
-A Pod = The smallest unit in Kubernetes. Usually one container.
-
-Like one delivery bike with one rider.
-
-If the rider falls sick (container crashes), Kubernetes automatically sends a new rider.
-
----
-
-### What is a Deployment?
-
-A Deployment = Instructions for Kubernetes about how many Pods to run.
+💡 **Think of a Deployment as a recipe: "always keep 2 copies of my app running."**
 
 ```yaml
-# Tell Kubernetes: run 3 copies of our FinRAG app
+# k8s/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: finrag-api
+  namespace: finrag
 spec:
-  replicas: 3        # 3 copies running at once
+  replicas: 2          # keep 2 copies running always
+  selector:
+    matchLabels:
+      app: finrag-api
   template:
     spec:
       containers:
-      - name: finrag
-        image: finrag:latest
-        ports:
-        - containerPort: 8000
+      - name: finrag-api
+        image: 020262236277.dkr.ecr.us-east-1.amazonaws.com/finrag-api:latest
 ```
 
-If any of the 3 copies crash, Kubernetes restarts them automatically.
+**Rolling updates:** When you push a new image, Kubernetes replaces Pods one at a time — the app never goes down during a deploy.
 
 ---
 
-### What is a Service?
+### 🔴 Q17 — What is a Service?
 
-A Service = A single address that sends traffic to all your Pods.
+💡 **Think of a Service as a hotel receptionist — one number, routes to whoever is free.**
 
-Like a receptionist at a hotel. You call the hotel number (one number), the receptionist routes you to whichever staff member is free.
+Pods come and go. A Service provides a **stable address** that always points to healthy Pods.
 
 ```yaml
+# k8s/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: finrag-service
+  namespace: finrag
 spec:
   selector:
-    app: finrag
+    app: finrag-api        # routes to all Pods with this label
   ports:
   - port: 80
     targetPort: 8000
-  type: LoadBalancer   # gives a public IP
+  type: LoadBalancer       # creates a public IP
 ```
+
+| Service Type | What it does |
+|---|---|
+| `ClusterIP` | Internal only — Pods talk to each other |
+| `NodePort` | Opens a port on every node |
+| `LoadBalancer` | Creates a public IP ← **we use this** |
 
 ---
 
-### What is Horizontal Pod Autoscaling (HPA)?
+## 🟠 Kubernetes Advanced
 
-HPA = Kubernetes automatically adds or removes Pods based on traffic.
+---
 
-Like a restaurant that calls in extra waiters when it gets busy, and sends them home when quiet.
+### 🟠 Q18 — What is HPA (Horizontal Pod Autoscaler)?
+
+💡 **Think of HPA as a restaurant calling in extra waiters when it gets busy.**
 
 ```yaml
+# k8s/hpa.yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: finrag-hpa
+  namespace: finrag
 spec:
   scaleTargetRef:
+    kind: Deployment
     name: finrag-api
-  minReplicas: 1      # minimum 1 Pod always running
-  maxReplicas: 10     # maximum 10 Pods when very busy
+  minReplicas: 1          # always at least 1 Pod
+  maxReplicas: 5          # never more than 5 Pods
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
+        type: Utilization
         averageUtilization: 70   # scale up if CPU > 70%
 ```
 
----
-
-### What is Amazon EKS?
-
-**EKS = Elastic Kubernetes Service**
-
-Running Kubernetes yourself is hard — lots of setup. AWS EKS is a managed version where Amazon handles the Kubernetes setup for you.
-
-You just:
-1. Create an EKS cluster (one command)
-2. Deploy your app
-3. AWS handles the rest
-
-In this project, the `k8s/` folder has deployment files ready for EKS.
-
----
-
-### Kubernetes vs Lambda — which to use?
-
-| | Lambda | Kubernetes (EKS) |
-|--|--------|-----------------|
-| **Best for** | Short tasks, event-driven | Long-running apps, APIs |
-| **Cost** | Pay per request | Pay per hour (even when idle) |
-| **Scaling** | Automatic | Automatic with HPA |
-| **Setup** | Very easy | Complex |
-| **Our app** | Good for indexing PDFs | Good for the API server |
-
-**In this project:**
-- Lambda → triggered when PDF uploaded to S3, runs indexing
-- EKS → runs the FastAPI server 24/7
-
----
-
-## PART 4 — How it all connects in this project
-
+**Flow:**
 ```
-User (Browser)
-    ↓
-FastAPI Server (running in Kubernetes Pod on EKS)
-    ↓           ↓
-   S3          Bedrock
-(store PDFs)  (Nova Lite LLM + Titan Embeddings)
-    ↓
-  Lambda
-(index PDF in background when uploaded to S3)
+Traffic spikes → CPU > 70% → HPA adds Pods  → CPU drops  ✅
+Traffic drops  → CPU < 70% → HPA removes Pods → Cost drops ✅
 ```
 
-**Full flow:**
-1. You open `http://finrag.44.206.217.242.nip.io` (EKS) or `http://13.222.137.204:8000` (ECS)
-2. Upload PDF → FastAPI saves it to S3 → Lambda triggers → indexes it
-3. Ask question → FastAPI retrieves chunks from index → sends to Bedrock Nova Lite → get answer
-4. Kubernetes keeps the FastAPI server always running, restarts if it crashes, scales if more users come
+---
+
+### 🟠 Q19 — What is Amazon EKS?
+
+💡 **Think of EKS as Kubernetes with Amazon as your IT department.**
+
+Running Kubernetes yourself = managing the control plane (complex, risky). EKS = AWS manages the control plane, you just manage your apps.
+
+**How we set up EKS in this project:**
+```bash
+eksctl create cluster \
+  --name finrag-cluster-eks \
+  --region us-east-1 \
+  --nodegroup-name finrag-nodes \
+  --node-type t3.small \
+  --nodes 2 \
+  --managed
+
+kubectl apply -f k8s/
+kubectl get pods -n finrag
+```
+
+**Lessons from our EKS setup:**
+
+| Problem we hit | Fix |
+|---|---|
+| `AL2_x86_64` AMI not supported for K8s 1.34 | Use `AL2023_x86_64_STANDARD` |
+| Wrong VPC subnets | Query EKS cluster VPC first, use its subnets |
+| Two clusters created by accident | Delete duplicate with `eksctl delete cluster` |
 
 ---
 
-## Key Terms Cheat Sheet
+### 🟠 Q20 — What is kubectl?
+
+💡 **Think of kubectl as the steering wheel for Kubernetes.**
+
+```bash
+# See what's running
+kubectl get pods -n finrag
+kubectl get deployments -n finrag
+kubectl get services -n finrag
+
+# Read logs
+kubectl logs deployment/finrag-api -n finrag --tail=50
+
+# Restart (pull latest image)
+kubectl rollout restart deployment/finrag-api -n finrag
+kubectl rollout status deployment/finrag-api -n finrag
+
+# Debug a pod
+kubectl describe pod <pod-name> -n finrag
+
+# Apply config changes
+kubectl apply -f k8s/
+```
+
+---
+
+### 🟠 Q21 — What is an Ingress?
+
+💡 **Think of Ingress as a smart traffic director at the building entrance.**
+
+A LoadBalancer Service = one public IP per service (expensive if you have many). Ingress = one IP, routes based on hostname or URL path.
+
+```yaml
+# k8s/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: finrag-ingress
+  namespace: finrag
+spec:
+  rules:
+  - host: finrag.44.206.217.242.nip.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: finrag-service
+            port:
+              number: 80
+```
+
+> 💡 **nip.io trick:** `finrag.44.206.217.242.nip.io` automatically resolves to `44.206.217.242` — free DNS without buying a domain!
+
+---
+
+## 🔷 How It All Connects in This Project
+
+---
+
+### 🔷 Q22 — Walk me through the full architecture end-to-end
+
+```
+👤 User (Browser)
+        │
+        ▼
+🌐 http://finrag.44.206.217.242.nip.io   ← EKS Ingress (nip.io free DNS)
+        │
+        ▼
+⚙️  FastAPI App  ← Kubernetes Pod on EKS (auto-restarts, scales with HPA)
+        │
+   ┌────┴─────────────┐
+   ▼                  ▼
+🗄️ S3 (PDFs)      🤖 AWS Bedrock
+pritam-finrag-docs    ├── Nova Lite       (generates answers)
+        │             └── Titan Embeddings (text → vectors)
+        ▼
+🔄 Lambda  ← triggers on S3 upload, indexes PDF in background
+```
+
+**Full user flow:**
+1. Open `http://finrag.44.206.217.242.nip.io`
+2. Upload PDF → FastAPI saves to S3 → Lambda triggers → chunks + embeds → stores index
+3. Ask question → encode with Titan → hybrid search (BM25 + dense) → rerank → send top chunks to Nova Lite → get answer
+4. Kubernetes keeps everything running 24/7, restarts crashes, scales under load
+
+---
+
+### 🔷 Key Terms Cheat Sheet
 
 | Term | Simple meaning |
 |------|---------------|
-| AWS | Amazon's rental shop for computers and internet tools |
-| S3 | Amazon's Google Drive for developers |
-| IAM | Security guard — controls who can do what |
-| Region | Which city's data center to use |
-| Bedrock | Amazon's AI model vending machine |
-| Nova Lite | Amazon's own AI model (like ChatGPT) |
-| Titan | Amazon's text-to-numbers converter |
-| Throttling | "Too many requests, slow down!" |
-| Lambda | Run code only when needed, no server required |
-| boto3 | Python remote control for AWS |
-| Docker | Lunchbox for your app |
-| Container | Box with your app + everything it needs |
-| Pod | One running container in Kubernetes |
-| Deployment | Instructions: "run 3 copies of my app" |
-| Service | Receptionist that routes traffic to Pods |
-| HPA | Auto-adds more Pods when busy |
-| EKS | Amazon's managed Kubernetes |
-| kubectl | Command line tool to control Kubernetes |
+| **AWS** | Amazon's rental shop for computers and internet tools |
+| **S3** | Amazon's Google Drive for developers (stores PDFs) |
+| **IAM** | Security guard — controls who can do what |
+| **Region** | Which city's data center to use (`us-east-1` = Virginia) |
+| **Bedrock** | Amazon's AI model vending machine |
+| **Nova Lite** | Amazon's own LLM — fast and cheap for document Q&A |
+| **Titan Embeddings** | Converts text to 1536-dimensional vectors for search |
+| **Throttling** | "Too many requests — slow down!" rate limit error |
+| **Lambda** | Run code only when triggered — zero idle cost |
+| **boto3** | Python remote control for all AWS services |
+| **ECR** | Amazon's Docker image registry (like Docker Hub) |
+| **ECS** | Amazon's simple container runner |
+| **EKS** | Amazon's managed Kubernetes |
+| **Docker** | Tool to package your app into a portable container |
+| **Container** | Box with your app + everything it needs to run |
+| **Pod** | One running container in Kubernetes |
+| **Deployment** | Recipe: "keep N copies of my app running always" |
+| **Service** | Stable address that routes traffic to healthy Pods |
+| **HPA** | Auto-adds Pods when busy, removes when quiet |
+| **kubectl** | Command-line steering wheel for Kubernetes |
+| **Ingress** | Smart traffic director — routes URLs to services |
+| **nip.io** | Free DNS trick: `finrag.1.2.3.4.nip.io` resolves to `1.2.3.4` |
