@@ -51,90 +51,75 @@ So when you ask *"What was the revenue trend?"*, the system finds the bar chart 
 ```mermaid
 flowchart LR
 
-    %% ── Left: Users & Clients ──────────────────────────────────────────────
+    %% ── USERS ───────────────────────────────────────
     User(["👤 User"])
 
-    subgraph Clients["Client Layer"]
-        direction TB
-        Web["🌐 Web Browser\nindex.html"]
-        Mobile["📱 API Client\ncURL / SDK"]
-    end
+    Web["🌐 Web Browser"]
+    App["📱 API Client"]
 
     User --> Web
-    User --> Mobile
+    User --> App
 
-    %% ── Middle: API Endpoints ──────────────────────────────────────────────
-    subgraph Endpoints["API Endpoints  •  src/api/routes/"]
-        direction TB
-        E1["📥 POST /ingest\ningest.py"]
-        E2["🔍 POST /query\nquery.py"]
-        E3["🏷️ POST /entities\nentities.py"]
-    end
+    %% ── API ENDPOINTS ───────────────────────────────
+    E1["📥 POST /ingest\ningest.py"]
+    E2["🔍 POST /query\nquery.py"]
+    E3["🏷️ POST /entities\nentities.py"]
 
     Web --> E1
     Web --> E2
-    Mobile --> E2
-    Mobile --> E3
+    App --> E2
+    App --> E3
 
-    %% ── Centre: API Management ─────────────────────────────────────────────
-    subgraph APIM["⚙️ API Management  •  src/api/"]
+    %% ── API MANAGEMENT (dashed box) ─────────────────
+    subgraph APIM["  ⚙️  API Management  •  src/api/  "]
         direction TB
-
-        Analytics["📊 API Analytics\nCloudWatch Logs\nLatency · Error rate"]
-
-        subgraph GW["🔀 API Gateway  •  main.py"]
-            direction TB
-            GW1(("fa:fa-circle"))
-            GW2(("fa:fa-circle"))
-            GW3(("fa:fa-circle"))
-            GW1 --> GW2
-            GW1 --> GW3
-        end
-
-        Catalog["📂 API Catalog\nSwagger /docs\nReDoc /redoc"]
+        Analytics["📊 API Analytics\nCloudWatch · Latency · Errors"]
+        Gateway["🔀 API Gateway\nmain.py · CORS · Auth · Routing"]
+        Catalog["📂 API Catalog\nSwagger /docs · ReDoc /redoc"]
     end
 
-    E1 --> GW
-    E2 --> GW
-    E3 --> GW
+    E1 --> Gateway
+    E2 --> Gateway
+    E3 --> Gateway
 
-    %% ── Right: API Backends ────────────────────────────────────────────────
-    subgraph Backends["☁️ API Backends"]
+    %% ── API BACKENDS (dashed box) ───────────────────
+    subgraph Backends["  ☁️  API Backends  "]
         direction TB
-
-        subgraph RAG["RAG Engine  •  src/rag/"]
-            direction TB
-            Parser["📄 pdf_parser.py\nPyMuPDF — Text + Images"]
-            Embed["🔢 embeddings.py\nall-MiniLM-L6-v2"]
-            Retriever["🔍 retriever.py\nBM25 + Vector + Reranker"]
-            LLM["🤖 bedrock_llm.py\nAmazon Nova Lite"]
-            Parser --> Embed --> Retriever --> LLM
-        end
-
-        subgraph Store["Storage"]
-            direction TB
-            VectorDB[("🗄️ FAISS Index\nindex_store/")]
-            S3DB[("🪣 AWS S3\npritam-finrag-docs")]
-            DynDB[("📋 DynamoDB\nDocument Metadata")]
-        end
-
-        Charts["🖼️ chart_extractor.py\nOpenCLIP + Bedrock Vision"]
-        Lambda["⚡ lambda_handler/handler.py\nAuto-index on S3 upload"]
+        RAG["🧠 RAG Pipeline\npdf_parser → embeddings\nretriever → bedrock_llm"]
+        Charts["🖼️ Chart Engine\nchart_extractor.py\nOpenCLIP + Bedrock Vision"]
+        NER["🏷️ NER Engine\nfinetune/inference.py\nLoRA BERT"]
+        S3[("🪣 AWS S3\nPDF Storage")]
+        Index[("🗄️ FAISS + BM25\nVector Index")]
+        Dynamo[("📋 DynamoDB\nMetadata")]
     end
 
-    GW --> RAG
-    GW --> Charts
-    RAG --> Store
-    S3DB --> Lambda --> VectorDB
+    Gateway --> RAG
+    Gateway --> Charts
+    Gateway --> NER
+    RAG --> Index
+    RAG --> S3
+    S3 -->|"⚡ Lambda\nauto-trigger"| Index
+    RAG --> Dynamo
 
-    %% ── Styling ────────────────────────────────────────────────────────────
-    style Clients   fill:#f0f4ff,stroke:#94a3b8,stroke-width:1.5px
-    style Endpoints fill:#f0fdf4,stroke:#86efac,stroke-width:1.5px
-    style APIM      fill:#fffbeb,stroke:#fcd34d,stroke-width:2px,stroke-dasharray:6
-    style GW        fill:#fef9c3,stroke:#fbbf24,stroke-width:1px
-    style Backends  fill:#fdf4ff,stroke:#d8b4fe,stroke-width:2px,stroke-dasharray:6
-    style RAG       fill:#f5f3ff,stroke:#c4b5fd,stroke-width:1px
-    style Store     fill:#f0fdf4,stroke:#86efac,stroke-width:1px
+    %% ── STYLES ──────────────────────────────────────
+    style APIM     fill:#fffbeb,stroke:#f59e0b,stroke-width:2px,stroke-dasharray:6 4
+    style Backends fill:#f5f3ff,stroke:#8b5cf6,stroke-width:2px,stroke-dasharray:6 4
+
+    style User      fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
+    style Web       fill:#e0f2fe,stroke:#0284c7,stroke-width:1.5px
+    style App       fill:#e0f2fe,stroke:#0284c7,stroke-width:1.5px
+    style E1        fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
+    style E2        fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
+    style E3        fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
+    style Analytics fill:#fef9c3,stroke:#ca8a04,stroke-width:1px
+    style Gateway   fill:#fef9c3,stroke:#ca8a04,stroke-width:1px
+    style Catalog   fill:#fef9c3,stroke:#ca8a04,stroke-width:1px
+    style RAG       fill:#ede9fe,stroke:#7c3aed,stroke-width:1.5px
+    style Charts    fill:#ede9fe,stroke:#7c3aed,stroke-width:1.5px
+    style NER       fill:#ede9fe,stroke:#7c3aed,stroke-width:1.5px
+    style S3        fill:#fce7f3,stroke:#db2777,stroke-width:1.5px
+    style Index     fill:#fce7f3,stroke:#db2777,stroke-width:1.5px
+    style Dynamo    fill:#fce7f3,stroke:#db2777,stroke-width:1.5px
 ```
 
 ---
