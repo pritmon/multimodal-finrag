@@ -1,8 +1,4 @@
-# ☁️ AWS, Bedrock & Kubernetes — Interview Q&A Guide
-
-> Explained simply — like teaching a 15-year-old — with real examples from the **multimodal-finrag** project.
-> Every concept has an analogy, a real-world example, and code/config from this repo.
-
+# ☁️ AWS, Bedrock & Kubernetes — 
 ---
 
 ## 🗂️ Quick Navigation
