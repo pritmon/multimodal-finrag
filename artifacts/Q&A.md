@@ -1,7 +1,5 @@
-# Multimodal Financial RAG — Interview Preparation Guide
+# Multimodal Financial RAG
 
-> Comprehensive Q&A for interviews based on the **multimodal-finrag** project.
-> Every answer is explained simply — like teaching a 15-year-old — with real code examples from this repo.
 
 ---
 
