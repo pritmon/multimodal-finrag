@@ -49,77 +49,61 @@ So when you ask *"What was the revenue trend?"*, the system finds the bar chart 
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
 
-    %% ── USERS ───────────────────────────────────────
     User(["👤 User"])
 
     Web["🌐 Web Browser"]
     App["📱 API Client"]
 
-    User --> Web
-    User --> App
+    User --> Web & App
 
-    %% ── API ENDPOINTS ───────────────────────────────
-    E1["📥 POST /ingest\ningest.py"]
-    E2["🔍 POST /query\nquery.py"]
-    E3["🏷️ POST /entities\nentities.py"]
-
-    Web --> E1
-    Web --> E2
-    App --> E2
-    App --> E3
-
-    %% ── API MANAGEMENT (dashed box) ─────────────────
-    subgraph APIM["  ⚙️  API Management  •  src/api/  "]
-        direction TB
-        Analytics["📊 API Analytics\nCloudWatch · Latency · Errors"]
-        Gateway["🔀 API Gateway\nmain.py · CORS · Auth · Routing"]
-        Catalog["📂 API Catalog\nSwagger /docs · ReDoc /redoc"]
+    subgraph APIM["⚙️ API Management — src/api/"]
+        direction LR
+        Analytics["📊 Analytics\nCloudWatch"]
+        Gateway["🔀 API Gateway\nmain.py"]
+        Catalog["📂 API Catalog\nSwagger /docs"]
     end
 
-    E1 --> Gateway
-    E2 --> Gateway
-    E3 --> Gateway
-
-    %% ── API BACKENDS (dashed box) ───────────────────
-    subgraph Backends["  ☁️  API Backends  "]
-        direction TB
-        RAG["🧠 RAG Pipeline\npdf_parser → embeddings\nretriever → bedrock_llm"]
-        Charts["🖼️ Chart Engine\nchart_extractor.py\nOpenCLIP + Bedrock Vision"]
-        NER["🏷️ NER Engine\nfinetune/inference.py\nLoRA BERT"]
-        S3[("🪣 AWS S3\nPDF Storage")]
-        Index[("🗄️ FAISS + BM25\nVector Index")]
-        Dynamo[("📋 DynamoDB\nMetadata")]
+    subgraph Endpoints["🔌 API Endpoints — src/api/routes/"]
+        direction LR
+        E1["📥 POST /ingest\ningest.py"]
+        E2["🔍 POST /query\nquery.py"]
+        E3["🏷️ POST /entities\nentities.py"]
     end
 
-    Gateway --> RAG
-    Gateway --> Charts
-    Gateway --> NER
-    RAG --> Index
-    RAG --> S3
-    S3 -->|"⚡ Lambda\nauto-trigger"| Index
-    RAG --> Dynamo
+    Web & App --> Endpoints
+    Endpoints --> APIM
 
-    %% ── STYLES ──────────────────────────────────────
-    style APIM     fill:#fffbeb,stroke:#f59e0b,stroke-width:2px,stroke-dasharray:6 4
-    style Backends fill:#f5f3ff,stroke:#8b5cf6,stroke-width:2px,stroke-dasharray:6 4
+    subgraph Backends["☁️ API Backends"]
+        direction LR
 
-    style User      fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
-    style Web       fill:#e0f2fe,stroke:#0284c7,stroke-width:1.5px
-    style App       fill:#e0f2fe,stroke:#0284c7,stroke-width:1.5px
-    style E1        fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
-    style E2        fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
-    style E3        fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
-    style Analytics fill:#fef9c3,stroke:#ca8a04,stroke-width:1px
-    style Gateway   fill:#fef9c3,stroke:#ca8a04,stroke-width:1px
-    style Catalog   fill:#fef9c3,stroke:#ca8a04,stroke-width:1px
-    style RAG       fill:#ede9fe,stroke:#7c3aed,stroke-width:1.5px
-    style Charts    fill:#ede9fe,stroke:#7c3aed,stroke-width:1.5px
-    style NER       fill:#ede9fe,stroke:#7c3aed,stroke-width:1.5px
-    style S3        fill:#fce7f3,stroke:#db2777,stroke-width:1.5px
-    style Index     fill:#fce7f3,stroke:#db2777,stroke-width:1.5px
-    style Dynamo    fill:#fce7f3,stroke:#db2777,stroke-width:1.5px
+        subgraph RAG["🧠 RAG Pipeline — src/rag/"]
+            direction TB
+            P1["pdf_parser.py\nRead PDF"]
+            P2["embeddings.py\nText to Vectors"]
+            P3["retriever.py\nBM25 + Vector + Rerank"]
+            P4["bedrock_llm.py\nNova Lite — Generate Answer"]
+            P1 --> P2 --> P3 --> P4
+        end
+
+        subgraph Storage["💾 Storage — AWS"]
+            direction TB
+            S1[("S3\nPDF Files")]
+            S2[("FAISS Index\nVectors")]
+            S3[("DynamoDB\nMetadata")]
+        end
+
+        Charts["🖼️ chart_extractor.py\nOpenCLIP + Bedrock Vision"]
+        NER["🏷️ inference.py\nLoRA BERT NER"]
+        Lambda["⚡ lambda_handler.py\nAuto-index on S3 upload"]
+    end
+
+    APIM --> RAG
+    APIM --> Charts
+    APIM --> NER
+    RAG --> Storage
+    S1 --> Lambda --> S2
 ```
 
 ---
