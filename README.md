@@ -44,6 +44,61 @@ So when you ask *"what was the revenue trend?"*, it finds the bar chart on that 
 
 ---
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        USER (Browser / API)                             │
+└───────────────────────────┬─────────────────────────────────────────────┘
+                            │ HTTP
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    AWS EKS / ECS  (FastAPI + Uvicorn)                   │
+│                                                                         │
+│   ┌─────────────┐    ┌──────────────┐    ┌──────────────────────────┐  │
+│   │  /ingest    │    │   /query     │    │   /entities              │  │
+│   │  (async)    │    │              │    │   (LoRA NER)             │  │
+│   └──────┬──────┘    └──────┬───────┘    └──────────────────────────┘  │
+└──────────┼────────────────── ┼────────────────────────────────────────-─┘
+           │                   │
+           ▼                   ▼
+┌──────────────────┐  ┌───────────────────────────────────────────────────┐
+│  INGEST PIPELINE │  │              QUERY PIPELINE                       │
+│                  │  │                                                   │
+│ PDF              │  │  Question                                         │
+│  └─ PyMuPDF      │  │    ├── BM25 Search (exact keywords)              │
+│      ├─ Text     │  │    └── Vector Search (semantic meaning)           │
+│      └─ Images   │  │              ↓                                    │
+│          └─ CLIP │  │        RRF Fusion (merge ranked lists)            │
+│   (chart detect) │  │              ↓                                    │
+│              ↓   │  │   Cross-Encoder Reranker (top 4 chunks)           │
+│   Bedrock Vision │  │              ↓                                    │
+│   (captioning)   │  │   Amazon Nova Lite on Bedrock                     │
+│              ↓   │  │              ↓                                    │
+│   800 page-chunks│  │   Answer + Page citations + Chart images          │
+│              ↓   │  └───────────────────────────────────────────────────┘
+│  all-MiniLM-L6-v2│
+│  (384-dim embed) │
+│              ↓   │
+│  VectorStoreIndex│
+│  (disk-persisted)│
+└──────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           AWS SERVICES                                   │
+│                                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  ┌───────────────┐  │
+│  │   S3 Bucket  │  │   Bedrock    │  │   Lambda   │  │  CloudWatch   │  │
+│  │  (PDFs store)│  │ Nova Lite LLM│  │ (indexing) │  │   (logs)      │  │
+│  │  pritam-     │  │ + Vision API │  │  trigger   │  │               │  │
+│  │  finrag-docs │  │              │  │  on S3     │  │               │  │
+│  └──────────────┘  └──────────────┘  └────────────┘  └───────────────┘  │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## How It Works
 
 **Ingest Phase** (run once per document):
